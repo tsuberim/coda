@@ -12,9 +12,9 @@ Compiles to LLVM via reference-counted GC.
 ```
 greet = \name -> `Hello, {name}!`
 
-add = \x y -> x + y
+add_two = \x y -> x + y
 
-result = add(1, 2)
+result = add_two(1, 2)
 greet(`world`)
 ```
 
@@ -22,10 +22,10 @@ greet(`world`)
 
 ### Variables
 
-Alphanumeric names start with a letter or `_`:
+Alphanumeric names start with a letter or `_`. Convention is **snake_case**:
 
 ```
-foo   _bar   myVar123
+foo   _bar   my_var   greet_user
 ```
 
 Symbolic names are sequences of `!@#$%^&*-+=|<>?/~.:`:
@@ -77,7 +77,7 @@ Any symbolic name can be used infix with spaces around it:
 ```
 1 + 2
 a >>= f
-5 @myOp 6
+5 @my_op 6
 ```
 
 Desugars to `op(lhs, rhs)`. Left-associative, no precedence yet (use parens).

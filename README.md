@@ -11,9 +11,9 @@ A purely functional, Hindley-Milner typed language that feels like a scripting l
 ```
 greet = \name -> `Hello, {name}!`
 
-add = \x y -> x + y
+add_two = \x y -> x + y
 
-result = add(1, 2)
+result = add_two(1, 2)
 greet(`world`)
 ```
 
