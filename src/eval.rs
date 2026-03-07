@@ -1,5 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
 
+use colored::Colorize;
+
 use crate::ast::*;
 
 // ── Value ─────────────────────────────────────────────────────────────────────
@@ -48,6 +50,23 @@ impl fmt::Display for Value {
             Value::Str(s) => write!(f, "{}", s),
             Value::Closure { params, .. } => write!(f, "<fn/{}>", params.len()),
             Value::Builtin(name, _) => write!(f, "<builtin:{}>", name),
+        }
+    }
+}
+
+impl Value {
+    /// Colored representation for REPL output.
+    pub fn pretty(&self) -> String {
+        match self {
+            Value::Int(n) => n.to_string().yellow().to_string(),
+            Value::Float(n) => n.to_string().yellow().to_string(),
+            Value::Str(s) => format!("{:?}", s).green().to_string(),
+            Value::Closure { params, .. } => {
+                format!("<fn/{}>", params.len()).cyan().to_string()
+            }
+            Value::Builtin(name, _) => {
+                format!("<builtin:{}>", name).cyan().to_string()
+            }
         }
     }
 }
