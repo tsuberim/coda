@@ -87,3 +87,15 @@ fn run_corpus(path: &str) {
 #[test] fn test_task_mixed_bind()     { run_corpus("corpus/task_mixed_bind.coda"); }
 #[test] fn test_task_type_error()     { run_corpus("corpus/task_type_error.coda"); }
 #[test] fn test_task_discard()        { run_corpus("corpus/task_discard.coda"); }
+#[test] fn test_task_toplevel_bind()  { run_corpus("corpus/task_toplevel_bind.coda"); }
+
+// list tests
+#[test] fn test_list_literal()    { run_corpus("corpus/list_literal.coda"); }
+#[test] fn test_list_empty()      { run_corpus("corpus/list_empty.coda"); }
+#[test] fn test_list_cons()       { run_corpus("corpus/list_cons.coda"); }
+#[test] fn test_list_head()       { run_corpus("corpus/list_head.coda"); }
+#[test] fn test_list_map()        { run_corpus("corpus/list_map.coda"); }
+#[test] fn test_list_fold()       { run_corpus("corpus/list_fold.coda"); }
+#[test] fn test_list_append()     { run_corpus("corpus/list_append.coda"); }
+#[test] fn test_list_ann()        { run_corpus("corpus/list_ann.coda"); }
+#[test] fn test_list_type_error() { run_corpus("corpus/list_type_error.coda"); }

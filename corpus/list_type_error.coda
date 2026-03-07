@@ -1,0 +1,3 @@
+-- mixing element types is a type error
+-- !> TYPE ERROR
+[1, `hello`]

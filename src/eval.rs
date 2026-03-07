@@ -21,6 +21,7 @@ pub enum Value {
     Builtin(String, Rc<dyn Fn(Vec<Value>) -> Result<Value, EvalError>>),
     /// A suspended IO computation. Returns Ok(value) on success, Err(tag) on failure.
     Task(Rc<dyn Fn() -> Result<Value, Value>>),
+    List(Vec<Value>),
 }
 
 impl PartialEq for Value {
@@ -30,6 +31,7 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Record(a), Value::Record(b)) => a == b,
             (Value::Tag(t1, v1), Value::Tag(t2, v2)) => t1 == t2 && v1 == v2,
+            (Value::List(a), Value::List(b)) => a == b,
             _ => false, // Closure, Builtin, Task not comparable
         }
     }
@@ -51,6 +53,10 @@ impl fmt::Debug for Value {
             Value::Closure { params, .. } => write!(f, "<fn/{}>", params.len()),
             Value::Builtin(name, _) => write!(f, "<builtin:{}>", name),
             Value::Task(_) => write!(f, "<task>"),
+            Value::List(xs) => {
+                let parts: Vec<_> = xs.iter().map(|v| format!("{:?}", v)).collect();
+                write!(f, "[{}]", parts.join(", "))
+            }
         }
     }
 }
@@ -71,6 +77,10 @@ impl fmt::Display for Value {
             Value::Closure { params, .. } => write!(f, "<fn/{}>", params.len()),
             Value::Builtin(name, _) => write!(f, "<builtin:{}>", name),
             Value::Task(_) => write!(f, "<task>"),
+            Value::List(xs) => {
+                let parts: Vec<_> = xs.iter().map(|v| format!("{}", v)).collect();
+                write!(f, "[{}]", parts.join(", "))
+            }
         }
     }
 }
@@ -94,6 +104,10 @@ impl Value {
             Value::Closure { params, .. } => format!("<fn/{}>", params.len()).cyan().to_string(),
             Value::Builtin(name, _) => format!("<builtin:{}>", name).cyan().to_string(),
             Value::Task(_) => "<task>".cyan().to_string(),
+            Value::List(xs) => {
+                let parts: Vec<_> = xs.iter().map(|v| v.pretty()).collect();
+                format!("[{}]", parts.join(", "))
+            }
         }
     }
 }
@@ -243,6 +257,13 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
                     got: format!("{:?}", other),
                 }),
             }
+        }
+
+        Expr::List(elems) => {
+            let vals = elems.iter()
+                .map(|e| eval(e, env))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Value::List(vals))
         }
 
         Expr::Import(path) => {
@@ -400,6 +421,88 @@ pub fn std_env() -> Env {
         std::io::stdin().lock().read_line(&mut line)
             .map_err(|e| Value::Tag("IoErr".into(), Box::new(Value::Str(e.to_string()))))?;
         Ok(Value::Str(line.trim_end_matches('\n').to_string()))
+    })));
+
+    // ── List builtins ────────────────────────────────────────────────────────
+
+    // cons(x, xs) — prepend x to xs.
+    env.set("cons", Value::Builtin("cons".into(), Rc::new(|args| {
+        if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }
+        let x = args[0].clone();
+        match args[1].clone() {
+            Value::List(mut xs) => { xs.insert(0, x); Ok(Value::List(xs)) }
+            other => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
+        }
+    })));
+
+    // head(xs) — first element as Some, or None if empty.
+    env.set("head", Value::Builtin("head".into(), Rc::new(|args| {
+        if args.len() != 1 { return Err(EvalError::ArityMismatch { expected: 1, got: args.len() }); }
+        match &args[0] {
+            Value::List(xs) => Ok(if xs.is_empty() {
+                Value::Tag("None".into(), Box::new(Value::Record(vec![])))
+            } else {
+                Value::Tag("Some".into(), Box::new(xs[0].clone()))
+            }),
+            other => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
+        }
+    })));
+
+    // tail(xs) — rest of list as Some, or None if empty.
+    env.set("tail", Value::Builtin("tail".into(), Rc::new(|args| {
+        if args.len() != 1 { return Err(EvalError::ArityMismatch { expected: 1, got: args.len() }); }
+        match &args[0] {
+            Value::List(xs) => Ok(if xs.is_empty() {
+                Value::Tag("None".into(), Box::new(Value::Record(vec![])))
+            } else {
+                Value::Tag("Some".into(), Box::new(Value::List(xs[1..].to_vec())))
+            }),
+            other => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
+        }
+    })));
+
+    // len(xs) — number of elements.
+    env.set("len", Value::Builtin("len".into(), Rc::new(|args| {
+        if args.len() != 1 { return Err(EvalError::ArityMismatch { expected: 1, got: args.len() }); }
+        match &args[0] {
+            Value::List(xs) => Ok(Value::Int(xs.len() as i64)),
+            other => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
+        }
+    })));
+
+    // map(f, xs) — apply f to each element.
+    env.set("map", Value::Builtin("map".into(), Rc::new(|args| {
+        if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }
+        let f = args[0].clone();
+        match args[1].clone() {
+            Value::List(xs) => {
+                let result: Result<Vec<Value>, EvalError> = xs.into_iter()
+                    .map(|x| apply(f.clone(), vec![x]))
+                    .collect();
+                Ok(Value::List(result?))
+            }
+            other => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
+        }
+    })));
+
+    // fold(f, init, xs) — left fold.
+    env.set("fold", Value::Builtin("fold".into(), Rc::new(|args| {
+        if args.len() != 3 { return Err(EvalError::ArityMismatch { expected: 3, got: args.len() }); }
+        let f = args[0].clone();
+        let init = args[1].clone();
+        match args[2].clone() {
+            Value::List(xs) => xs.into_iter().try_fold(init, |acc, x| apply(f.clone(), vec![acc, x])),
+            other => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
+        }
+    })));
+
+    // append(xs, ys) — concatenate two lists.
+    env.set("append", Value::Builtin("append".into(), Rc::new(|args| {
+        if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }
+        match (args[0].clone(), args[1].clone()) {
+            (Value::List(mut xs), Value::List(ys)) => { xs.extend(ys); Ok(Value::List(xs)) }
+            (other, _) => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
+        }
     })));
 
     env

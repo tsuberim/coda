@@ -222,10 +222,22 @@ pub fn type_expr_parser() -> impl Parser<char, crate::ast::TypeExpr, Error = Sim
             .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
             .map(TypeExpr::Var);
 
-        let type_con = filter(|c: &char| c.is_uppercase())
+        let type_con_name = filter(|c: &char| c.is_uppercase())
             .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
-            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
-            .map(TypeExpr::Con);
+            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>());
+
+        // `Con(te, ...)` — applied type constructor, e.g. `List(Int)`, `Task(Int, Str)`.
+        let type_app = type_con_name.clone()
+            .then(
+                te.clone()
+                    .padded()
+                    .separated_by(just(','))
+                    .allow_trailing()
+                    .delimited_by(just('('), just(')'))
+            )
+            .map(|(name, args)| TypeExpr::App(name, args));
+
+        let type_con = type_con_name.map(TypeExpr::Con);
 
         let row_var = just('|')
             .padded_by(hws())
@@ -283,6 +295,7 @@ pub fn type_expr_parser() -> impl Parser<char, crate::ast::TypeExpr, Error = Sim
             type_record,
             type_union,
             type_parens,
+            type_app,  // before type_con — both start with uppercase
             type_con,
             type_var,
         ));
@@ -398,6 +411,14 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
         let paren_block = block_body.padded().delimited_by(just('('), just(')'));
 
+        // List literal: [e1, e2, ...]
+        let list_lit = expr.clone()
+            .padded()
+            .separated_by(just(','))
+            .allow_trailing()
+            .delimited_by(just('['), just(']'))
+            .map(Expr::List);
+
         // Record literal: {field: expr, ...}
         let record_field = ident
             .clone()
@@ -491,6 +512,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             lambda,
             when_expr,
             import_expr,
+            list_lit,
             record,
             paren_block,
             tag_expr,

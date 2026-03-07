@@ -1,0 +1,5 @@
+-- type annotation with parameterized List type
+xs : List(Int)
+xs = [1, 2, 3]
+len(xs)
+-- => 3

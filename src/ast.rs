@@ -3,6 +3,8 @@
 pub enum TypeExpr {
     Var(String),
     Con(String),
+    /// `Con(te, ...)` — applied type constructor, e.g. `List(Int)`, `Task(Int, Str)`.
+    App(String, Vec<TypeExpr>),
     Fun(Vec<TypeExpr>, Box<TypeExpr>),
     Record(Vec<(String, TypeExpr)>, Option<String>),  // None=closed, Some(row_var)=open
     Union(Vec<(String, Option<TypeExpr>)>, Option<String>),
@@ -38,6 +40,8 @@ pub enum Expr {
     When(Box<Expr>, Vec<(String, Option<String>, Box<Expr>)>, Option<Box<Expr>>),
     /// `import \`path\`` — statically known path, resolved at type-check and eval time.
     Import(String),
+    /// `[e1, e2, ...]` — list literal.
+    List(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

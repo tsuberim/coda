@@ -1,0 +1,3 @@
+-- fold sums a list
+fold(\acc x -> acc + x, 0, [1, 2, 3, 4])
+-- => 10

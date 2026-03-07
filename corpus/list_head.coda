@@ -1,0 +1,5 @@
+-- head returns Some for non-empty, None for empty
+first = head([10, 20, 30])
+second = head([])
+{first: first, second: second}
+-- => {first: Some 10, second: None}

@@ -416,6 +416,10 @@ pub fn type_expr_to_type(te: &TypeExpr, counter: &mut usize) -> Type {
     match te {
         TypeExpr::Var(v) => Type::Var(v.clone()),
         TypeExpr::Con(n) => Type::Con(n.clone(), vec![]),
+        TypeExpr::App(name, args) => {
+            let arg_tys = args.iter().map(|a| type_expr_to_type(a, counter)).collect();
+            Type::Con(name.clone(), arg_tys)
+        }
         TypeExpr::Fun(params, ret) => {
             let ps = params.iter().map(|p| type_expr_to_type(p, counter)).collect();
             let r = type_expr_to_type(ret, counter);
@@ -622,6 +626,18 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
             Ok((s.clone(), apply_subst(&s, &ret)))
         }
 
+        Expr::List(elems) => {
+            let elem_ty = ctx.fresh();
+            let mut s = Subst::new();
+            for elem in elems {
+                let (se, te) = infer_inner(ctx, &apply_subst_env(&s, env), elem)?;
+                s = compose(&se, &s);
+                let su = unify(ctx, &apply_subst(&s, &te), &apply_subst(&s, &elem_ty))?;
+                s = compose(&su, &s);
+            }
+            Ok((s.clone(), Type::Con("List".into(), vec![apply_subst(&s, &elem_ty)])))
+        }
+
         Expr::Import(path) => {
             let ty = crate::module::load_module(path)
                 .map_err(TypeError::ModuleError)?.ty;
@@ -782,6 +798,61 @@ pub fn std_type_env() -> TypeEnv {
     env.insert("read_line".into(), Scheme {
         vars: vec!["r".into()],
         ty: task(Type::str_(), Type::Union(vec![("IoErr".into(), Type::str_())], Some("r".into()))),
+    });
+
+    // List helpers.
+    let list = |a: Type| Type::Con("List".into(), vec![a]);
+    let some_none = |a: Type| Type::Union(
+        vec![("None".into(), Type::unit()), ("Some".into(), a)],
+        None,
+    );
+
+    // cons : ∀a. a -> List a -> List a
+    env.insert("cons".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(vec![tv("a"), list(tv("a"))], list(tv("a"))),
+    });
+
+    // head : ∀a. List a -> [None | Some a]
+    env.insert("head".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(vec![list(tv("a"))], some_none(tv("a"))),
+    });
+
+    // tail : ∀a. List a -> [None | Some (List a)]
+    env.insert("tail".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(vec![list(tv("a"))], some_none(list(tv("a")))),
+    });
+
+    // len : ∀a. List a -> Int
+    env.insert("len".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(vec![list(tv("a"))], Type::int()),
+    });
+
+    // map : ∀a b. (a -> b) -> List a -> List b
+    env.insert("map".into(), Scheme {
+        vars: vec!["a".into(), "b".into()],
+        ty: Type::fun(
+            vec![Type::fun(vec![tv("a")], tv("b")), list(tv("a"))],
+            list(tv("b")),
+        ),
+    });
+
+    // fold : ∀a b. (b -> a -> b) -> b -> List a -> b
+    env.insert("fold".into(), Scheme {
+        vars: vec!["a".into(), "b".into()],
+        ty: Type::fun(
+            vec![Type::fun(vec![tv("b"), tv("a")], tv("b")), tv("b"), list(tv("a"))],
+            tv("b"),
+        ),
+    });
+
+    // append : ∀a. List a -> List a -> List a
+    env.insert("append".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(vec![list(tv("a")), list(tv("a"))], list(tv("a"))),
     });
 
     env

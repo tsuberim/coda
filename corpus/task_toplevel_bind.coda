@@ -1,0 +1,4 @@
+-- monadic bind works at the top level of a file (file is parsed as a block)
+x <- ok(21)
+ok(x + x)
+-- => 42

@@ -1,0 +1,3 @@
+-- map applies a function to each element
+map(\x -> x + x, [1, 2, 3])
+-- => [2, 4, 6]
