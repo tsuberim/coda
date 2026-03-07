@@ -41,21 +41,22 @@ fn print_help() {
     println!("  {}", "A purely functional, HM-typed language.".dimmed());
     println!();
     println!("  {}", "Syntax".bold().underline());
-    println!("  {}    lambda          {}  \\x y -> x + y", "\\x ->".bright_cyan(), "—".dimmed());
-    println!("  {}      application   {}  f(x, y)", "f(x)".bright_cyan(), "—".dimmed());
-    println!("  {}      infix         {}  1 + 2", "a + b".bright_cyan(), "—".dimmed());
-    println!("  {}    template str  {}  `hi {{name}}`", "`...`".bright_cyan(), "—".dimmed());
-    println!("  {}      block         {}  (x = 1; x + 1)", "(x=e; e)".bright_cyan(), "—".dimmed());
-    println!("  {}      annotation    {}  f : Int -> Int", "x : T".bright_cyan(), "—".dimmed());
+    println!("  {}    lambda               {}  \\x y -> x + y", "\\x ->".bright_cyan(), "—".dimmed());
+    println!("  {}      application        {}  f(x, y)", "f(x)".bright_cyan(), "—".dimmed());
+    println!("  {}      infix              {}  1 + 2", "a + b".bright_cyan(), "—".dimmed());
+    println!("  {}    template str       {}  `hi {{name}}`", "`...`".bright_cyan(), "—".dimmed());
+    println!("  {}      block              {}  (x = 1; x + 1)", "(x=e; e)".bright_cyan(), "—".dimmed());
+    println!("  {}      annotation         {}  f : Int -> Int", "x : T".bright_cyan(), "—".dimmed());
+    println!("  {}  import module (cached) {}  math = import `math.coda`", "import `p`".bright_cyan(), "—".dimmed());
     println!("  {}      comment", "--".bright_cyan());
     println!("  {}  multiline comment", "--- ... ---".bright_cyan());
     println!();
     println!("  {}", "Builtins".bold().underline());
     println!("  {} {} {}   string concat", "++".bright_cyan(), ":".dimmed(), "Str Str -> Str".bright_blue());
     println!("  {} {} {}   integer addition", "+".bright_cyan(), ":".dimmed(), "Int Int -> Int".bright_blue());
-    println!("  {}  {}  {}  import module (cached)", "import `path`".bright_cyan(), ":".dimmed(), "keyword".bright_blue());
     println!();
     println!("  {}  {}    {}  {}", "Ctrl-D".bright_yellow(), "exit", "↑↓".bright_yellow(), "history");
+    println!("  {}   {}    {}  {}", ":clear".bright_yellow(), "clear screen", ":env".bright_yellow(), "show bindings");
     println!();
 }
 
@@ -90,6 +91,27 @@ fn repl() {
                 let src = line.trim();
                 if src.is_empty() { continue; }
                 rl.add_history_entry(src).ok();
+
+                if src == ":clear" {
+                    rl.clear_screen().ok();
+                    continue;
+                }
+
+                if src == ":env" {
+                    let mut bindings: Vec<_> = type_env.iter()
+                        .filter(|(name, _)| !name.starts_with('#'))
+                        .collect();
+                    bindings.sort_by_key(|(name, _)| name.as_str());
+                    if bindings.is_empty() {
+                        println!("{}", "(empty)".dimmed());
+                    } else {
+                        for (name, scheme) in bindings {
+                            let ty = lang::types::normalize_ty(scheme.ty.clone());
+                            println!("{} {} {}", name.bright_cyan(), ":".dimmed(), ty.pretty());
+                        }
+                    }
+                    continue;
+                }
 
                 match repl_parser().parse(src) {
                     Err(errs) => {
