@@ -19,6 +19,8 @@ pub enum Value {
         env: Env,
     },
     Builtin(String, Rc<dyn Fn(Vec<Value>) -> Result<Value, EvalError>>),
+    /// A suspended IO computation. Returns Ok(value) on success, Err(tag) on failure.
+    Task(Rc<dyn Fn() -> Result<Value, Value>>),
 }
 
 impl PartialEq for Value {
@@ -28,7 +30,7 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Record(a), Value::Record(b)) => a == b,
             (Value::Tag(t1, v1), Value::Tag(t2, v2)) => t1 == t2 && v1 == v2,
-            _ => false,
+            _ => false, // Closure, Builtin, Task not comparable
         }
     }
 }
@@ -48,6 +50,7 @@ impl fmt::Debug for Value {
             },
             Value::Closure { params, .. } => write!(f, "<fn/{}>", params.len()),
             Value::Builtin(name, _) => write!(f, "<builtin:{}>", name),
+            Value::Task(_) => write!(f, "<task>"),
         }
     }
 }
@@ -67,6 +70,7 @@ impl fmt::Display for Value {
             },
             Value::Closure { params, .. } => write!(f, "<fn/{}>", params.len()),
             Value::Builtin(name, _) => write!(f, "<builtin:{}>", name),
+            Value::Task(_) => write!(f, "<task>"),
         }
     }
 }
@@ -89,6 +93,7 @@ impl Value {
             },
             Value::Closure { params, .. } => format!("<fn/{}>", params.len()).cyan().to_string(),
             Value::Builtin(name, _) => format!("<builtin:{}>", name).cyan().to_string(),
+            Value::Task(_) => "<task>".cyan().to_string(),
         }
     }
 }
@@ -259,6 +264,7 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
                         cur = next;
                     }
                     crate::ast::BlockItem::Ann(_, _) => {}
+                    crate::ast::BlockItem::MonadicBind(_, _) => unreachable!("desugared at parse time"),
                 }
             }
             eval(body, &cur)
@@ -286,6 +292,19 @@ fn apply(f: Value, args: Vec<Value>) -> Result<Value, EvalError> {
             expected: "function",
             got: format!("{:?}", other),
         }),
+    }
+}
+
+// ── Task execution ────────────────────────────────────────────────────────────
+
+/// Run a Task value to completion. Returns Ok(value) or Err(error_tag).
+pub fn run_task(v: &Value) -> Result<Value, Value> {
+    match v {
+        Value::Task(f) => f(),
+        other => Err(Value::Tag(
+            "RuntimeError".into(),
+            Box::new(Value::Str(format!("expected task, got {}", other))),
+        )),
     }
 }
 
@@ -321,6 +340,66 @@ pub fn std_env() -> Env {
                 got: format!("{:?} and {:?}", a, b),
             }),
         }
+    })));
+
+    // ok(v) — wrap a value in a successful Task.
+    env.set("ok", Value::Builtin("ok".into(), Rc::new(|args| {
+        if args.len() != 1 {
+            return Err(EvalError::ArityMismatch { expected: 1, got: args.len() });
+        }
+        let v = args[0].clone();
+        Ok(Value::Task(Rc::new(move || Ok(v.clone()))))
+    })));
+
+    // then(task, f) — sequence two Tasks; error type accumulates via row unification.
+    env.set("then", Value::Builtin("then".into(), Rc::new(|args| {
+        if args.len() != 2 {
+            return Err(EvalError::ArityMismatch { expected: 2, got: args.len() });
+        }
+        let task = args[0].clone();
+        let f = args[1].clone();
+        Ok(Value::Task(Rc::new(move || {
+            let v = run_task(&task)?;
+            let next = apply(f.clone(), vec![v])
+                .map_err(|e| Value::Tag("EvalError".into(), Box::new(Value::Str(e.to_string()))))?;
+            run_task(&next)
+        })))
+    })));
+
+    // fail(tag) — create a failed Task with the given error value.
+    env.set("fail", Value::Builtin("fail".into(), Rc::new(|args| {
+        if args.len() != 1 {
+            return Err(EvalError::ArityMismatch { expected: 1, got: args.len() });
+        }
+        let e = args[0].clone();
+        Ok(Value::Task(Rc::new(move || Err(e.clone()))))
+    })));
+
+    // print(str) — print a line to stdout.
+    env.set("print", Value::Builtin("print".into(), Rc::new(|args| {
+        if args.len() != 1 {
+            return Err(EvalError::ArityMismatch { expected: 1, got: args.len() });
+        }
+        let s = match &args[0] {
+            Value::Str(s) => s.clone(),
+            other => return Err(EvalError::TypeMismatch {
+                expected: "Str",
+                got: format!("{:?}", other),
+            }),
+        };
+        Ok(Value::Task(Rc::new(move || {
+            println!("{}", s);
+            Ok(Value::Record(vec![]))
+        })))
+    })));
+
+    // read_line — read a line from stdin.
+    env.set("read_line", Value::Task(Rc::new(|| {
+        use std::io::BufRead;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)
+            .map_err(|e| Value::Tag("IoErr".into(), Box::new(Value::Str(e.to_string()))))?;
+        Ok(Value::Str(line.trim_end_matches('\n').to_string()))
     })));
 
     env

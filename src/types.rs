@@ -664,6 +664,7 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                             env2.insert(name.clone(), scheme);
                         }
                     }
+                    BlockItem::MonadicBind(_, _) => unreachable!("desugared at parse time"),
                 }
             }
             let env3 = apply_subst_env(&s, &env2);
@@ -739,6 +740,50 @@ pub fn std_type_env() -> TypeEnv {
     env.insert("+".into(), Scheme::mono(
         Type::fun(vec![Type::int(), Type::int()], Type::int())
     ));
+
+    // Task helpers.
+    let task = |ok: Type, err: Type| Type::Con("Task".into(), vec![ok, err]);
+    let tv = |n: &str| Type::Var(n.into());
+
+    // ok : ∀a e. a -> Task a e
+    env.insert("ok".into(), Scheme {
+        vars: vec!["a".into(), "e".into()],
+        ty: Type::fun(vec![tv("a")], task(tv("a"), tv("e"))),
+    });
+
+    // then : ∀a b e. Task a e -> (a -> Task b e) -> Task b e
+    env.insert("then".into(), Scheme {
+        vars: vec!["a".into(), "b".into(), "e".into()],
+        ty: Type::fun(
+            vec![
+                task(tv("a"), tv("e")),
+                Type::fun(vec![tv("a")], task(tv("b"), tv("e"))),
+            ],
+            task(tv("b"), tv("e")),
+        ),
+    });
+
+    // fail : ∀a e. e -> Task a e
+    env.insert("fail".into(), Scheme {
+        vars: vec!["a".into(), "e".into()],
+        ty: Type::fun(vec![tv("e")], task(tv("a"), tv("e"))),
+    });
+
+    // print : ∀r. Str -> Task {} [IoErr Str | r]
+    env.insert("print".into(), Scheme {
+        vars: vec!["r".into()],
+        ty: Type::fun(
+            vec![Type::str_()],
+            task(Type::unit(), Type::Union(vec![("IoErr".into(), Type::str_())], Some("r".into()))),
+        ),
+    });
+
+    // read_line : ∀r. Task Str [IoErr Str | r]
+    env.insert("read_line".into(), Scheme {
+        vars: vec!["r".into()],
+        ty: task(Type::str_(), Type::Union(vec![("IoErr".into(), Type::str_())], Some("r".into()))),
+    });
+
     env
 }
 

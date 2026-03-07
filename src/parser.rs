@@ -53,7 +53,7 @@ fn item_parser(
         .then(ep.clone())
         .map(|(name, e)| vec![BlockItem::Bind(name, e)]);
 
-    let ann_binding = ident
+    let ann_binding = ident.clone()
         .then_ignore(hws())
         .then_ignore(just(':'))
         .then_ignore(hws())
@@ -65,7 +65,7 @@ fn item_parser(
         .then_ignore(hws())
         .then_ignore(assign())
         .then_ignore(hws())
-        .then(ep)
+        .then(ep.clone())
         .map(|(fields, rhs)| {
             let tmp = fresh_tmp();
             let mut items = vec![BlockItem::Bind(tmp.clone(), rhs)];
@@ -79,7 +79,35 @@ fn item_parser(
         })
         .boxed();
 
-    val_binding.boxed().or(ann_binding).or(destr_binding)
+    let monadic_bind = ident
+        .then_ignore(hws())
+        .then_ignore(larrow())
+        .then_ignore(hws())
+        .then(ep)
+        .map(|(name, e)| {
+            let bind_name = if name == "_" { fresh_tmp() } else { name };
+            vec![BlockItem::MonadicBind(bind_name, e)]
+        })
+        .boxed();
+
+    val_binding.boxed().or(ann_binding).or(destr_binding).or(monadic_bind)
+}
+
+/// Desugar a block's items + final expression into an `Expr`.
+/// `MonadicBind(x, e)` items are folded right-to-left into `then(e, \x -> rest)`.
+/// Regular items are preserved as `Block` nodes.
+fn desugar_block(items: Vec<BlockItem>, body: Expr) -> Expr {
+    if !items.iter().any(|i| matches!(i, BlockItem::MonadicBind(_, _))) {
+        return if items.is_empty() { body } else { Expr::Block(items, Box::new(body)) };
+    }
+    items.into_iter().rev().fold(body, |acc, item| match item {
+        BlockItem::MonadicBind(name, e) => Expr::App(
+            Box::new(Expr::Var("then".into())),
+            vec![e, Expr::Lam(vec![name], Box::new(acc))],
+        ),
+        BlockItem::Bind(name, e) => Expr::Block(vec![BlockItem::Bind(name, e)], Box::new(acc)),
+        BlockItem::Ann(name, te) => Expr::Block(vec![BlockItem::Ann(name, te)], Box::new(acc)),
+    })
 }
 
 fn line_comment() -> impl Parser<char, (), Error = Simple<char>> + Clone {
@@ -165,11 +193,22 @@ fn sym_name() -> impl Parser<char, String, Error = Simple<char>> + Clone {
         .at_least(1)
         .collect::<String>()
         .try_map(|s, span| {
-            if s == "->" || s == "=" {
+            if s == "->" || s == "=" || s == "<-" {
                 Err(Simple::custom(span, format!("'{}' is reserved", s)))
             } else {
                 Ok(s)
             }
+        })
+}
+
+/// Matches exactly `<-` (monadic bind arrow).
+fn larrow() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    filter(|c: &char| SYM_CHARS.contains(*c))
+        .repeated()
+        .at_least(1)
+        .collect::<String>()
+        .try_map(|s, span| {
+            if s == "<-" { Ok(()) } else { Err(Simple::custom(span, "expected `<-`")) }
         })
 }
 
@@ -354,11 +393,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(expr.clone())
             .map(|(item_groups, body)| {
                 let items: Vec<BlockItem> = item_groups.into_iter().flatten().collect();
-                if items.is_empty() {
-                    body
-                } else {
-                    Expr::Block(items, Box::new(body))
-                }
+                desugar_block(items, body)
             });
 
         let paren_block = block_body.padded().delimited_by(just('('), just(')'));
@@ -537,11 +572,7 @@ pub fn file_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         .then(ep)
         .map(|(item_groups, body)| {
             let items: Vec<BlockItem> = item_groups.into_iter().flatten().collect();
-            if items.is_empty() {
-                body
-            } else {
-                Expr::Block(items, Box::new(body))
-            }
+            desugar_block(items, body)
         })
         .padded_by(padding())
         .then_ignore(end())

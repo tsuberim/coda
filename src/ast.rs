@@ -8,11 +8,14 @@ pub enum TypeExpr {
     Union(Vec<(String, Option<TypeExpr>)>, Option<String>),
 }
 
-/// A statement inside a block: either a value binding or a type annotation.
+/// A statement inside a block: either a value binding, type annotation, or monadic bind.
+/// `MonadicBind` is desugared to `then(e, \x -> rest)` at parse time in block/file context,
+/// but kept as-is for the REPL which executes tasks step by step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockItem {
     Bind(String, Expr),
     Ann(String, TypeExpr),
+    MonadicBind(String, Expr),
 }
 
 /// Core AST. Infix `a + b` desugars to `App(Var("+"), [a, b])`.

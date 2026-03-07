@@ -5,7 +5,7 @@ use clap::Parser;
 use colored::Colorize;
 use lang::{
     ast::BlockItem,
-    eval::{eval, std_env},
+    eval::{eval, run_task, std_env, Value},
     parser::{file_parser, repl_parser, ReplInput},
     types::{infer, infer_scheme, std_type_env},
 };
@@ -173,6 +173,47 @@ fn repl() {
                                         }
                                     }
                                 }
+                                BlockItem::MonadicBind(name, expr) => {
+                                    // Type-check: expr must be Task ok err. Extract ok type.
+                                    let scheme = match infer_scheme(&type_env, expr) {
+                                        Err(e) => { eprintln!("{} {e}", "type error:".red().bold()); break 'items; }
+                                        Ok(s) => s,
+                                    };
+                                    let ok_scheme = match &scheme.ty {
+                                        lang::types::Type::Con(n, args) if n == "Task" && args.len() == 2 => {
+                                            lang::types::Scheme::mono(args[0].clone())
+                                        }
+                                        _ => {
+                                            eprintln!("{} expected Task, got {}", "type error:".red().bold(), lang::types::normalize_ty(scheme.ty.clone()).pretty());
+                                            break 'items;
+                                        }
+                                    };
+                                    // Eval and run the task.
+                                    match eval(expr, &env) {
+                                        Err(e) => { eprintln!("{} {e}", "error:".red().bold()); break 'items; }
+                                        Ok(task_val) => match run_task(&task_val) {
+                                            Err(err_val) => {
+                                                eprintln!("{} {}", "task failed:".red().bold(), err_val);
+                                                break 'items;
+                                            }
+                                            Ok(result) => {
+                                                if !name.starts_with('#') {
+                                                    let display_ty = lang::types::normalize_ty(ok_scheme.ty.clone());
+                                                    println!(
+                                                        "{} {} {} {} {}",
+                                                        name.bright_cyan(),
+                                                        "<-".dimmed(),
+                                                        result.pretty(),
+                                                        ":".dimmed(),
+                                                        display_ty.pretty(),
+                                                    );
+                                                }
+                                                type_env.insert(name.clone(), ok_scheme);
+                                                env.set(name, result);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -180,6 +221,15 @@ fn repl() {
                         match infer(&type_env, &expr) {
                             Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
                             Ok(ty) => match eval(&expr, &env) {
+                                Ok(Value::Task(ref f)) => match f() {
+                                    Ok(result) => {
+                                        let unit = Value::Record(vec![]);
+                                        if result != unit {
+                                            println!("{}", result.pretty());
+                                        }
+                                    }
+                                    Err(err_val) => eprintln!("{} {}", "task failed:".red().bold(), err_val),
+                                },
                                 Ok(val) => println!("{} {} {}", val.pretty(), ":".dimmed(), ty.pretty()),
                                 Err(e) => eprintln!("{} {e}", "error:".red().bold()),
                             }
@@ -193,8 +243,18 @@ fn repl() {
 
 fn interpret(path: PathBuf) {
     match lang::module::load_module(&path.to_string_lossy()) {
-        Ok(entry) => println!("{} : {}", entry.val, entry.ty),
         Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
+        Ok(entry) => match entry.val {
+            Value::Task(_) => match run_task(&entry.val) {
+                Ok(result) => {
+                    if result != Value::Record(vec![]) {
+                        println!("{}", result);
+                    }
+                }
+                Err(err_val) => { eprintln!("error: {}", err_val); std::process::exit(1); }
+            },
+            _ => println!("{} : {}", entry.val, entry.ty),
+        }
     }
 }
 
