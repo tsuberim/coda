@@ -28,7 +28,8 @@ print(`Hello, {name}!`)
 - **Full type inference** — Hindley-Milner with row-polymorphic records and unions
 - **Tagged unions** — `Tag payload`, `when x is Tag y -> ...`, open/closed rows
 - **Records** — `{x: 1, y: 2}`, `.field` access, structural subtyping
-- **Type annotations** — optional, enforced: `f : Int -> Int`
+- **Lists** — `[1, 2, 3]`, `cons`, `head`, `tail`, `map`, `fold`, `append`, `len`
+- **Type annotations** — optional, enforced: `f : Int -> Int`, `xs : List(Int)`
 - **Modules** — `import \`file.coda\``, cached by canonical path
 - **Task monad** — `ok`, `then`, `fail`; `x <- task` bind syntax; row-polymorphic error types
 - **REPL** — persistent history, colored output, `:env`, `:clear`

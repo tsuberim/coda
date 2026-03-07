@@ -35,6 +35,8 @@ Symbolic names are sequences of `!@$%^&*-+=|<>?/~.:`:
 ```
 42        -- integer
 `hello`   -- string (backtick-quoted)
+[1, 2, 3] -- list (homogeneous, any element type)
+[]        -- empty list
 ```
 
 ### Template strings
@@ -119,6 +121,24 @@ when shape is
 
 Tags with no payload carry an implicit unit payload. Unions are row-polymorphic: a value of type `[Some Int | *]` is accepted wherever `[Some Int, None | *]` is expected.
 
+### Lists
+
+```
+xs = [1, 2, 3]
+len(xs)                     -- 3
+cons(0, xs)                 -- [0, 1, 2, 3]
+map(\x -> x + x, xs)       -- [2, 4, 6]
+fold(\acc x -> acc + x, 0, xs)  -- 6
+append([1], [2, 3])         -- [1, 2, 3]
+
+-- head and tail return [None | Some val]
+when head(xs) is
+  Some x -> x
+  None   -> 0
+```
+
+All elements must have the same type (inferred). The type is `List(a)`.
+
 ### Type annotations
 
 Optional; enforced when present.
@@ -127,6 +147,10 @@ Optional; enforced when present.
 -- annotate before or after a binding
 f : Int -> Int
 f = \x -> x + 1
+
+-- parameterized types use Con(arg, ...) syntax
+xs : List(Int)
+xs = [1, 2, 3]
 
 -- in-block
 (n : Int; n = 5; n + 1)
@@ -202,10 +226,17 @@ Task Str [IoErr Str, NetworkErr Str | r]
 
 ## Builtins
 
-| Name   | Type              | Description          |
-|--------|-------------------|----------------------|
-| `++`   | `Str Str -> Str`  | String concatenation |
-| `+`    | `Int Int -> Int`  | Integer addition     |
+| Name     | Type                                    | Description              |
+|----------|-----------------------------------------|--------------------------|
+| `++`     | `Str Str -> Str`                        | String concatenation     |
+| `+`      | `Int Int -> Int`                        | Integer addition         |
+| `cons`   | `a -> List(a) -> List(a)`               | Prepend element          |
+| `head`   | `List(a) -> [None \| Some a]`           | First element            |
+| `tail`   | `List(a) -> [None \| Some List(a)]`     | Rest of list             |
+| `len`    | `List(a) -> Int`                        | Length                   |
+| `map`    | `(a -> b) -> List(a) -> List(b)`        | Transform elements       |
+| `fold`   | `(b -> a -> b) -> b -> List(a) -> b`    | Left fold                |
+| `append` | `List(a) -> List(a) -> List(a)`         | Concatenate two lists    |
 
 ## Implementation docs
 

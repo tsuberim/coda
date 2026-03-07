@@ -15,6 +15,7 @@ Expr = Var(String)
      | Tag(String, Option<Expr>)
      | When(Expr, Vec<(String, Option<String>, Expr)>, Option<Expr>)
      | Import(String)
+     | List(Vec<Expr>)
 
 BlockItem = Bind(String, Expr)
           | Ann(String, TypeExpr)
@@ -22,6 +23,7 @@ BlockItem = Bind(String, Expr)
 
 TypeExpr = Var(String)
          | Con(String)
+         | App(String, Vec<TypeExpr>)   -- applied type constructor: List(Int), Task(Int, Str)
          | Fun(Vec<TypeExpr>, TypeExpr)
          | Record(Vec<(String, TypeExpr)>, Option<String>)
          | Union(Vec<(String, Option<TypeExpr>)>, Option<String>)
@@ -33,6 +35,7 @@ Desugars at parse time:
 - `None` → `Tag("None", None)` (payload filled with unit at type-check time)
 - `{name, age: y} = e` → `Bind("#0", e); Bind("name", Field(Var("#0"), "name")); Bind("y", Field(Var("#0"), "age"))` (`#N` is impossible in user syntax)
 - `x <- e` in a block/file → `then(e, \x -> rest)` via right-to-left fold in `desugar_block`; `_` uses a fresh `#N` tmp
+- `[e1, e2, e3]` → `List([e1, e2, e3])` (list literal; `[]` is an empty list)
 
 ## Key design decisions
 
@@ -61,6 +64,13 @@ because a `,` or `]` following the tag name (no horizontal whitespace) means no
 payload, while whitespace + non-whitespace char triggers payload parsing.
 In expression position the same rule applies but also rejects uppercase first char,
 preventing `[Foo Bar]` from being parsed as `Foo` with payload `Bar` (both tags).
+
+**List vs union syntax:** `[...]` in expression position is always a list literal.
+`[...]` in type position is always a union type. No conflict — the two parsers are distinct.
+
+**Type application syntax:** `Con(te, ...)` — e.g. `List(Int)`, `Task(Int, Str)`.
+Parsed before bare `Con` in the type atom choice, since both start with an uppercase letter.
+The display format matches: `Type::Con("List", [Int])` prints as `List(Int)`.
 
 ## Entry points
 
