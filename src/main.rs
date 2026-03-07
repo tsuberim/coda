@@ -33,41 +33,38 @@ fn main() {
 }
 
 fn repl() {
-    use std::io::{self, BufRead, Write};
+    use rustyline::{error::ReadlineError, DefaultEditor};
 
     println!("Coda REPL  (Ctrl-D to exit)");
 
     let env = std_env();
-    let stdin = io::stdin();
+    let mut rl = DefaultEditor::new().expect("failed to init readline");
 
     loop {
-        print!("> ");
-        io::stdout().flush().unwrap();
-
-        let mut line = String::new();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
+        match rl.readline("> ") {
+            Err(ReadlineError::Eof | ReadlineError::Interrupted) => break,
             Err(e) => { eprintln!("error: {e}"); break; }
-        }
+            Ok(line) => {
+                let src = line.trim();
+                if src.is_empty() { continue; }
+                rl.add_history_entry(src).ok();
 
-        let src = line.trim();
-        if src.is_empty() { continue; }
-
-        match repl_parser().parse(src) {
-            Err(errs) => {
-                for e in errs { eprintln!("parse error: {e}"); }
-            }
-            Ok(ReplInput::Binding(name, expr)) => {
-                match eval(&expr, &env) {
-                    Ok(val) => env.set(&name, val),
-                    Err(e) => eprintln!("error: {e}"),
-                }
-            }
-            Ok(ReplInput::Expr(expr)) => {
-                match eval(&expr, &env) {
-                    Ok(val) => println!("{}", val),
-                    Err(e) => eprintln!("error: {e}"),
+                match repl_parser().parse(src) {
+                    Err(errs) => {
+                        for e in errs { eprintln!("parse error: {e}"); }
+                    }
+                    Ok(ReplInput::Binding(name, expr)) => {
+                        match eval(&expr, &env) {
+                            Ok(val) => env.set(&name, val),
+                            Err(e) => eprintln!("error: {e}"),
+                        }
+                    }
+                    Ok(ReplInput::Expr(expr)) => {
+                        match eval(&expr, &env) {
+                            Ok(val) => println!("{}", val),
+                            Err(e) => eprintln!("error: {e}"),
+                        }
+                    }
                 }
             }
         }

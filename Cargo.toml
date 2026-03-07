@@ -11,3 +11,4 @@ path = "src/main.rs"
 ariadne = "0.6.0"
 chumsky = "0.9"
 clap = { version = "4.5.60", features = ["derive"] }
+rustyline = "17.0.2"
