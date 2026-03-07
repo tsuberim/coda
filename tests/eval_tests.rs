@@ -1,6 +1,6 @@
 use chumsky::Parser as _;
 use lang::{
-    eval::{eval, std_env, Value},
+    eval::{eval, std_env, EvalError, Value},
     parser::file_parser,
 };
 
@@ -9,6 +9,13 @@ fn run(src: &str) -> Value {
         .parse(src)
         .unwrap_or_else(|e| panic!("parse error in {:?}: {:?}", src, e));
     eval(&ast, &std_env()).unwrap_or_else(|e| panic!("eval error in {:?}: {:?}", src, e))
+}
+
+fn run_err(src: &str) -> EvalError {
+    let ast = file_parser()
+        .parse(src)
+        .unwrap_or_else(|e| panic!("parse error in {:?}: {:?}", src, e));
+    eval(&ast, &std_env()).expect_err("expected eval error")
 }
 
 fn int(n: i64) -> Value { Value::Int(n) }
@@ -61,13 +68,14 @@ fn test_template_interp() {
 }
 
 #[test]
-fn test_template_int_interp() {
-    assert_eq!(run("`n = {42}`"), str_("n = 42"));
+fn test_template_int_interp_type_error() {
+    // ++ is strings-only; interpolating a number is a type error
+    assert!(matches!(run_err("`n = {42}`"), EvalError::TypeMismatch { .. }));
 }
 
 #[test]
-fn test_template_expr_interp() {
-    assert_eq!(run("`sum = {1 + 2}`"), str_("sum = 3"));
+fn test_concat_non_string_type_error() {
+    assert!(matches!(run_err("1 ++ 2"), EvalError::TypeMismatch { .. }));
 }
 
 // ── lambda & application ──────────────────────────────────────────────────────

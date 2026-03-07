@@ -185,16 +185,14 @@ fn apply(f: Value, args: Vec<Value>) -> Result<Value, EvalError> {
 pub fn std_env() -> Env {
     let env = Env::new();
 
-    // String concat — variadic, stringifies any primitive.
+    // String concat — variadic, strings only.
     env.set("++", Value::Builtin("++".into(), Rc::new(|args| {
         let mut out = String::new();
         for v in args {
             match v {
                 Value::Str(s) => out.push_str(&s),
-                Value::Int(n) => out.push_str(&n.to_string()),
-                Value::Float(f) => out.push_str(&f.to_string()),
                 other => return Err(EvalError::TypeMismatch {
-                    expected: "stringifiable value",
+                    expected: "string",
                     got: format!("{:?}", other),
                 }),
             }
