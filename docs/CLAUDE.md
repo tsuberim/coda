@@ -1,3 +1,6 @@
+---
+permalink: /
+---
 # Coda
 
 A purely functional, Hindley-Milner typed language that feels like a scripting language.
