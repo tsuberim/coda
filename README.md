@@ -31,7 +31,7 @@ print(`Hello, {name}!`)
 - **Lists** — `[1, 2, 3]`, `cons`, `head`, `tail`, `map`, `fold`, `append`, `len`
 - **Type annotations** — optional, enforced: `f : Int -> Int`, `xs : List(Int)`
 - **Modules** — `import \`file.coda\``, cached by canonical path
-- **Task monad** — `ok`, `then`, `fail`; `x <- task` bind syntax; row-polymorphic error types
+- **Task monad** — `ok`, `>>=`, `fail`, `catch`; `x <- task` bind syntax; row-polymorphic error types
 - **REPL** — persistent history, colored output, `:env`, `:clear`
 - **Interpreter** — tree-walking eval
 

@@ -191,9 +191,10 @@ Coda has no mutable state or implicit effects. IO is represented as `Task ok err
 ### Primitives
 
 ```
-ok(v)          -- wrap v in a successful Task  : a -> Task a e
-t >>= f        -- sequence: run t, pass result to f  : Task a e -> (a -> Task b e) -> Task b e
-fail(e)        -- always-failing Task  : e -> Task a e
+ok(v)            -- wrap v in a successful Task  : a -> Task a e
+t >>= f          -- sequence: run t, pass result to f  : Task a e -> (a -> Task b e) -> Task b e
+fail(e)          -- always-failing Task  : e -> Task a e
+catch(t, f)      -- recover from failure: run t; on error call f  : Task a e -> (e -> Task a f) -> Task a f
 ```
 
 `>>=` is also available as `then`.
@@ -221,6 +222,17 @@ The error type is a row-polymorphic union. Each `<-` step unifies the error row,
 Task Str [IoErr Str, NetworkErr Str | r]
 ```
 
+### Error recovery
+
+```
+safe = catch(might_fail, \err ->
+  when err is
+    NotFound -> ok(`default`)
+)
+```
+
+The handler receives the error value and returns a new Task. The result error type `f` is independent of the original `e`, so recovery can change the error type entirely.
+
 ### IO builtins
 
 | Name        | Type                              | Description            |
@@ -234,6 +246,10 @@ Task Str [IoErr Str, NetworkErr Str | r]
 |----------|-----------------------------------------|--------------------------|
 | `++`     | `Str Str -> Str`                        | String concatenation     |
 | `+`      | `Int Int -> Int`                        | Integer addition         |
+| `-`      | `Int Int -> Int`                        | Integer subtraction      |
+| `*`      | `Int Int -> Int`                        | Integer multiplication   |
+| `==`     | `a -> a -> [False \| True]`             | Structural equality      |
+| `fix`    | `(a -> a) -> a`                         | Fixed-point (recursion)  |
 | `::` / `cons`   | `a -> List(a) -> List(a)`        | Prepend element          |
 | `head`   | `List(a) -> [None \| Some a]`           | First element            |
 | `tail`   | `List(a) -> [None \| Some List(a)]`     | Rest of list             |
