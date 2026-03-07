@@ -1,0 +1,3 @@
+-- ok wraps a value in a successful task
+ok(42)
+-- => 42

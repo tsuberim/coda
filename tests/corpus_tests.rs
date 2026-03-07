@@ -1,19 +1,20 @@
 use chumsky::Parser as _;
 use lang::{
-    eval::{eval, std_env},
+    eval::{eval, run_task, std_env, Value},
     parser::file_parser,
     types::{infer, std_type_env},
 };
 
-/// Run a `.coda` file: parse, type-check, eval. Panic on any error.
-/// - `-- => VALUE`     asserts the evaluated result equals VALUE.
-/// - `-- !> TYPE ERROR` asserts the file produces a type error (no eval).
+/// Run a `.coda` file: parse, type-check, eval (and run tasks). Panic on any error.
+/// - `-- => VALUE`      asserts the result equals VALUE (runs task if needed).
+/// - `-- !> TYPE ERROR` asserts a type error (no eval).
+/// - `-- !> TASK FAIL`  asserts the task fails (no value check).
 fn run_corpus(path: &str) {
     let src = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read {}: {}", path, e));
 
-    let expects_type_error = src.lines()
-        .any(|l| l.trim() == "-- !> TYPE ERROR");
+    let expects_type_error = src.lines().any(|l| l.trim() == "-- !> TYPE ERROR");
+    let expects_task_fail  = src.lines().any(|l| l.trim() == "-- !> TASK FAIL");
 
     let ast = file_parser()
         .parse(src.as_str())
@@ -32,14 +33,29 @@ fn run_corpus(path: &str) {
     let value = eval(&ast, &std_env())
         .unwrap_or_else(|e| panic!("eval error in {}: {}", path, e));
 
+    // Run tasks to completion.
+    let result = match value {
+        Value::Task(_) => {
+            let outcome = run_task(&value);
+            if expects_task_fail {
+                outcome.err().unwrap_or_else(|| panic!("expected task failure in {} but it succeeded", path));
+                return;
+            }
+            outcome.unwrap_or_else(|e| panic!("task failed in {}: {}", path, e))
+        }
+        other => {
+            if expects_task_fail {
+                panic!("expected task failure in {} but got a non-task value", path);
+            }
+            other
+        }
+    };
+
     if let Some(expected) = src.lines()
         .rev()
         .find_map(|l| l.trim().strip_prefix("-- => "))
     {
-        assert_eq!(
-            value.to_string(), expected,
-            "assertion failed in {}", path
-        );
+        assert_eq!(result.to_string(), expected, "assertion failed in {}", path);
     }
 }
 
@@ -60,3 +76,14 @@ fn run_corpus(path: &str) {
 #[test] fn test_modules()           { run_corpus("corpus/modules.coda"); }
 #[test] fn test_destructure()       { run_corpus("corpus/destructure.coda"); }
 #[test] fn test_ann_wrong_arg()     { run_corpus("corpus/ann_wrong_arg.coda"); }
+
+// task monad tests
+#[test] fn test_task_ok()             { run_corpus("corpus/task_ok.coda"); }
+#[test] fn test_task_then()           { run_corpus("corpus/task_then.coda"); }
+#[test] fn test_task_bind()           { run_corpus("corpus/task_bind.coda"); }
+#[test] fn test_task_bind_multi()     { run_corpus("corpus/task_bind_multi.coda"); }
+#[test] fn test_task_fail()           { run_corpus("corpus/task_fail.coda"); }
+#[test] fn test_task_fail_propagate() { run_corpus("corpus/task_fail_propagate.coda"); }
+#[test] fn test_task_mixed_bind()     { run_corpus("corpus/task_mixed_bind.coda"); }
+#[test] fn test_task_type_error()     { run_corpus("corpus/task_type_error.coda"); }
+#[test] fn test_task_discard()        { run_corpus("corpus/task_discard.coda"); }

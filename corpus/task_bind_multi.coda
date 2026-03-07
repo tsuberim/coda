@@ -1,0 +1,7 @@
+-- multiple monadic binds chain correctly
+(
+  a <- ok(10)
+  b <- ok(32)
+  ok(a + b)
+)
+-- => 42

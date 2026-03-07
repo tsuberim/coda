@@ -1,0 +1,6 @@
+-- monadic bind syntax desugars to then
+(
+  x <- ok(21)
+  ok(x + x)
+)
+-- => 42

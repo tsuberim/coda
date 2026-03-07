@@ -1,0 +1,8 @@
+-- monadic binds can mix with regular let bindings
+(
+  x <- ok(20)
+  y = x + 2
+  z <- ok(y)
+  ok(z + z)
+)
+-- => 44

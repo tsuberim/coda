@@ -1,0 +1,7 @@
+-- failure propagates through bind chain; later steps are skipped
+(
+  x <- fail(Boom)
+  _ <- ok(99)
+  ok(x + 1)
+)
+-- !> TASK FAIL

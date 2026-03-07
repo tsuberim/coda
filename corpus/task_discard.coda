@@ -1,0 +1,6 @@
+-- _ discards the task result
+(
+  _ <- ok(99)
+  ok(42)
+)
+-- => 42

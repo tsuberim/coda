@@ -1,0 +1,4 @@
+-- using a non-Task value with <- is a type error
+-- !> TYPE ERROR
+x <- 42
+ok(x)

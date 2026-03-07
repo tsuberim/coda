@@ -1,0 +1,3 @@
+-- fail produces a failing task; then short-circuits on failure
+then(fail(Oops), \_ -> ok(42))
+-- !> TASK FAIL

@@ -1,0 +1,3 @@
+-- then sequences two tasks
+then(ok(21), \x -> ok(x + x))
+-- => 42
