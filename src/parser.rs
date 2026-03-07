@@ -182,6 +182,30 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     })
 }
 
+/// A single REPL input: either a binding (`name = expr`) or a bare expression.
+pub enum ReplInput {
+    Binding(String, Expr),
+    Expr(Expr),
+}
+
+pub fn repl_parser() -> impl Parser<char, ReplInput, Error = Simple<char>> {
+    let ident = filter(|c: &char| c.is_alphabetic() || *c == '_')
+        .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+        .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>());
+
+    let binding = ident
+        .then_ignore(hws())
+        .then_ignore(assign())
+        .then_ignore(hws())
+        .then(expr_parser())
+        .map(|(name, expr)| ReplInput::Binding(name, expr));
+
+    binding
+        .or(expr_parser().map(ReplInput::Expr))
+        .padded()
+        .then_ignore(end())
+}
+
 /// Parse a complete file (top-level block without surrounding parens).
 pub fn file_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     let binding = {

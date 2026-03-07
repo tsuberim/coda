@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use chumsky::Parser as _;
 use clap::Parser;
-use lang::parser::file_parser;
+use lang::{
+    eval::{eval, std_env},
+    parser::{file_parser, repl_parser, ReplInput},
+};
 
 #[derive(Parser)]
 #[command(name = "coda", about = "The Coda language — repl / interpreter / compiler")]
@@ -33,14 +36,17 @@ fn repl() {
     use std::io::{self, BufRead, Write};
 
     println!("Coda REPL  (Ctrl-D to exit)");
+
+    let env = std_env();
     let stdin = io::stdin();
+
     loop {
         print!("> ");
         io::stdout().flush().unwrap();
 
         let mut line = String::new();
         match stdin.lock().read_line(&mut line) {
-            Ok(0) => break, // EOF
+            Ok(0) => break,
             Ok(_) => {}
             Err(e) => { eprintln!("error: {e}"); break; }
         }
@@ -48,10 +54,21 @@ fn repl() {
         let src = line.trim();
         if src.is_empty() { continue; }
 
-        match file_parser().parse(src) {
-            Ok(ast) => println!("{:#?}", ast),
+        match repl_parser().parse(src) {
             Err(errs) => {
                 for e in errs { eprintln!("parse error: {e}"); }
+            }
+            Ok(ReplInput::Binding(name, expr)) => {
+                match eval(&expr, &env) {
+                    Ok(val) => env.set(&name, val),
+                    Err(e) => eprintln!("error: {e}"),
+                }
+            }
+            Ok(ReplInput::Expr(expr)) => {
+                match eval(&expr, &env) {
+                    Ok(val) => println!("{}", val),
+                    Err(e) => eprintln!("error: {e}"),
+                }
             }
         }
     }
@@ -60,11 +77,10 @@ fn repl() {
 fn interpret(path: PathBuf) {
     let src = read_file(&path);
     match file_parser().parse(src.as_str()) {
-        Ok(ast) => {
-            // TODO: eval
-            eprintln!("(interpreter not yet implemented)");
-            println!("{:#?}", ast);
-        }
+        Ok(ast) => match eval(&ast, &std_env()) {
+            Ok(val) => println!("{}", val),
+            Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
+        },
         Err(errs) => {
             for e in errs { eprintln!("{}:parse error: {e}", path.display()); }
             std::process::exit(1);
@@ -76,10 +92,10 @@ fn compile(path: PathBuf, output: Option<PathBuf>) {
     let out = output.unwrap_or_else(|| PathBuf::from(path.file_stem().unwrap()));
     let src = read_file(&path);
     match file_parser().parse(src.as_str()) {
-        Ok(ast) => {
+        Ok(_ast) => {
             // TODO: codegen
             eprintln!("(compiler not yet implemented, would write to {})", out.display());
-            println!("{:#?}", ast);
+            std::process::exit(1);
         }
         Err(errs) => {
             for e in errs { eprintln!("{}:parse error: {e}", path.display()); }
