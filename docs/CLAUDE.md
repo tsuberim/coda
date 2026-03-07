@@ -158,6 +158,48 @@ math.double(21)
 - Open union construction: `Some 5 : [Some Int | *]`
 - Closed union from `when` without `otherwise`
 
+## Task monad
+
+Coda has no mutable state or implicit effects. IO is represented as `Task ok err` — a suspended computation that either succeeds with a value of type `ok` or fails with a value of type `err`.
+
+### Primitives
+
+```
+ok(v)          -- wrap v in a successful Task  : a -> Task a e
+then(t, f)     -- sequence: run t, pass result to f  : Task a e -> (a -> Task b e) -> Task b e
+fail(e)        -- always-failing Task  : e -> Task a e
+```
+
+### Monadic bind syntax
+
+Inside any block or file, `x <- expr` is sugar for `then`:
+
+```
+(
+  line <- read_line
+  print(`You typed: {line}`)
+)
+```
+
+Desugars right-to-left: `then(read_line, \line -> print(...))`.
+
+`_` discards the result: `_ <- some_task`.
+
+### Error accumulation
+
+The error type is a row-polymorphic union. Each `<-` step unifies the error row, so if a block can fail in multiple ways the type reflects all of them:
+
+```
+Task Str [IoErr Str, NetworkErr Str | r]
+```
+
+### IO builtins
+
+| Name        | Type                              | Description            |
+|-------------|-----------------------------------|------------------------|
+| `print`     | `Str -> Task {} [IoErr Str \| r]` | Print a line to stdout |
+| `read_line` | `Task Str [IoErr Str \| r]`       | Read a line from stdin |
+
 ## Builtins
 
 | Name   | Type              | Description          |

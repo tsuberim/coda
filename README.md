@@ -18,9 +18,9 @@ describe = \shape ->
 point = {x: 3, y: 4}
 dist  = point.x + point.y
 
--- modules
-math = load(`math.coda`)
-math.double(21)
+-- IO via Task monad
+name <- read_line
+print(`Hello, {name}!`)
 ```
 
 ## Features
@@ -29,8 +29,9 @@ math.double(21)
 - **Tagged unions** — `Tag payload`, `when x is Tag y -> ...`, open/closed rows
 - **Records** — `{x: 1, y: 2}`, `.field` access, structural subtyping
 - **Type annotations** — optional, enforced: `f : Int -> Int`
-- **Modules** — `load(`file.coda`)`, cached by canonical path
-- **REPL** — persistent history, colored output
+- **Modules** — `import \`file.coda\``, cached by canonical path
+- **Task monad** — `ok`, `then`, `fail`; `x <- task` bind syntax; row-polymorphic error types
+- **REPL** — persistent history, colored output, `:env`, `:clear`
 - **Interpreter** — tree-walking eval
 
 ## Build & run

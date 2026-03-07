@@ -18,6 +18,7 @@ Expr = Var(String)
 
 BlockItem = Bind(String, Expr)
           | Ann(String, TypeExpr)
+          | MonadicBind(String, Expr)   -- transient; desugared before leaving the parser
 
 TypeExpr = Var(String)
          | Con(String)
@@ -31,6 +32,7 @@ Desugars at parse time:
 - `` `hi {x}` `` → `App(Var("++"), [Lit("hi "), x])`
 - `None` → `Tag("None", None)` (payload filled with unit at type-check time)
 - `{name, age: y} = e` → `Bind("#0", e); Bind("name", Field(Var("#0"), "name")); Bind("y", Field(Var("#0"), "age"))` (`#N` is impossible in user syntax)
+- `x <- e` in a block/file → `then(e, \x -> rest)` via right-to-left fold in `desugar_block`; `_` uses a fresh `#N` tmp
 
 ## Key design decisions
 
@@ -72,7 +74,7 @@ All three share `item_parser(ep, ident)` for parsing bindings, annotations, and 
 
 ## Reserved symbols
 
-`->` (lambda/function arrow) and `=` (binding) are reserved and rejected by `sym_name()`.
+`->` (lambda/function arrow), `=` (binding), and `<-` (monadic bind) are reserved and rejected by `sym_name()`.
 Everything else in `!@$%^&*-+=|<>?/~.:` is valid as a symbolic name.
 
 Reserved words: `when`, `is`, `otherwise`, `import`.
