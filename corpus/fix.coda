@@ -1,13 +1,8 @@
--- fix enables recursion: sum a list
-sum_list = fix(\rec -> \xs ->
-  when head(xs) is
-    None   -> 0
-    Some x -> (
-      rest = when tail(xs) is
-        Some t -> t
-        None   -> []
-      x + rec(rest)
-    )
+-- fix enables recursion: factorial
+factorial = fix(\rec -> \n ->
+  when (n == 0) is
+    True  -> 1
+    False -> n * rec(n - 1)
 )
-sum_list([1, 2, 3, 4, 5])
--- => 15
+factorial(5)
+-- => 120

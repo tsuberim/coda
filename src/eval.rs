@@ -376,6 +376,20 @@ pub fn std_env() -> Env {
         }
     })));
 
+    // Integer subtraction.
+    env.set("-", Value::Builtin("-".into(), Rc::new(|args| {
+        if args.len() != 2 {
+            return Err(EvalError::ArityMismatch { expected: 2, got: args.len() });
+        }
+        match (&args[0], &args[1]) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+            (a, b) => Err(EvalError::TypeMismatch {
+                expected: "Int Int",
+                got: format!("{:?} and {:?}", a, b),
+            }),
+        }
+    })));
+
     // Integer multiplication.
     env.set("*", Value::Builtin("*".into(), Rc::new(|args| {
         if args.len() != 2 {

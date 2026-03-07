@@ -756,6 +756,9 @@ pub fn std_type_env() -> TypeEnv {
     env.insert("+".into(), Scheme::mono(
         Type::fun(vec![Type::int(), Type::int()], Type::int())
     ));
+    env.insert("-".into(), Scheme::mono(
+        Type::fun(vec![Type::int(), Type::int()], Type::int())
+    ));
     env.insert("*".into(), Scheme::mono(
         Type::fun(vec![Type::int(), Type::int()], Type::int())
     ));
