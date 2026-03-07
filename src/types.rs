@@ -756,6 +756,9 @@ pub fn std_type_env() -> TypeEnv {
     env.insert("+".into(), Scheme::mono(
         Type::fun(vec![Type::int(), Type::int()], Type::int())
     ));
+    env.insert("*".into(), Scheme::mono(
+        Type::fun(vec![Type::int(), Type::int()], Type::int())
+    ));
 
     // Task helpers.
     let task = |ok: Type, err: Type| Type::Con("Task".into(), vec![ok, err]);
@@ -868,6 +871,21 @@ pub fn std_type_env() -> TypeEnv {
     env.insert("<>".into(), Scheme {
         vars: vec!["a".into()],
         ty: Type::fun(vec![list(tv("a")), list(tv("a"))], list(tv("a"))),
+    });
+
+    // == : ∀a. a -> a -> [False | True]
+    env.insert("==".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(
+            vec![tv("a"), tv("a")],
+            Type::Union(vec![("False".into(), Type::unit()), ("True".into(), Type::unit())], None),
+        ),
+    });
+
+    // fix : ∀a. (a -> a) -> a
+    env.insert("fix".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(vec![Type::fun(vec![tv("a")], tv("a"))], tv("a")),
     });
 
     // Aliases: natural names for the symbolic builtins.

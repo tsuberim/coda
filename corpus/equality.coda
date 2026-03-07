@@ -1,0 +1,5 @@
+-- == returns True or False tags
+a = (1 == 1)
+b = (1 == 2)
+{a: a, b: b}
+-- => {a: True, b: False}

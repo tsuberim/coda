@@ -329,6 +329,19 @@ pub fn run_task(v: &Value) -> Result<Value, Value> {
     }
 }
 
+// ── Fixed-point combinator ────────────────────────────────────────────────────
+
+/// Build a value that behaves as `fix(f)`: when called with args, evaluates `f(fix(f))(args)`.
+/// Wrapping in a closure avoids eager infinite recursion in a strict language.
+fn fix_value(f: Rc<Value>) -> Value {
+    let f2 = f.clone();
+    Value::Builtin("<fix>".into(), Rc::new(move |args| {
+        let recursive = fix_value(f2.clone());
+        let stepped = apply((*f2).clone(), vec![recursive])?;
+        apply(stepped, args)
+    }))
+}
+
 // ── Standard environment ──────────────────────────────────────────────────────
 
 pub fn std_env() -> Env {
@@ -361,6 +374,41 @@ pub fn std_env() -> Env {
                 got: format!("{:?} and {:?}", a, b),
             }),
         }
+    })));
+
+    // Integer multiplication.
+    env.set("*", Value::Builtin("*".into(), Rc::new(|args| {
+        if args.len() != 2 {
+            return Err(EvalError::ArityMismatch { expected: 2, got: args.len() });
+        }
+        match (&args[0], &args[1]) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+            (a, b) => Err(EvalError::TypeMismatch {
+                expected: "Int Int",
+                got: format!("{:?} and {:?}", a, b),
+            }),
+        }
+    })));
+
+    // Structural equality — returns True or False tag.
+    env.set("==", Value::Builtin("==".into(), Rc::new(|args| {
+        if args.len() != 2 {
+            return Err(EvalError::ArityMismatch { expected: 2, got: args.len() });
+        }
+        let unit = Box::new(Value::Record(vec![]));
+        Ok(if args[0] == args[1] {
+            Value::Tag("True".into(), unit)
+        } else {
+            Value::Tag("False".into(), unit)
+        })
+    })));
+
+    // fix(f) — fixed-point combinator for recursion: fix(f) = f(fix(f))
+    env.set("fix", Value::Builtin("fix".into(), Rc::new(|args| {
+        if args.len() != 1 {
+            return Err(EvalError::ArityMismatch { expected: 1, got: args.len() });
+        }
+        Ok(fix_value(Rc::new(args[0].clone())))
     })));
 
     // ok(v) — wrap a value in a successful Task.

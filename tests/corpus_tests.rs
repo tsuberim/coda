@@ -88,6 +88,9 @@ fn run_corpus(path: &str) {
 #[test] fn test_task_type_error()     { run_corpus("corpus/task_type_error.coda"); }
 #[test] fn test_task_discard()        { run_corpus("corpus/task_discard.coda"); }
 #[test] fn test_task_toplevel_bind()  { run_corpus("corpus/task_toplevel_bind.coda"); }
+#[test] fn test_fix()                 { run_corpus("corpus/fix.coda"); }
+#[test] fn test_multiply()            { run_corpus("corpus/multiply.coda"); }
+#[test] fn test_equality()            { run_corpus("corpus/equality.coda"); }
 
 // list tests
 #[test] fn test_list_literal()    { run_corpus("corpus/list_literal.coda"); }

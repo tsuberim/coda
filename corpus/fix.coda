@@ -1,0 +1,13 @@
+-- fix enables recursion: sum a list
+sum_list = fix(\rec -> \xs ->
+  when head(xs) is
+    None   -> 0
+    Some x -> (
+      rest = when tail(xs) is
+        Some t -> t
+        None   -> []
+      x + rec(rest)
+    )
+)
+sum_list([1, 2, 3, 4, 5])
+-- => 15
