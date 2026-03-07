@@ -3,6 +3,10 @@ name = "lang"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "coda"
+path = "src/main.rs"
+
 [dependencies]
 ariadne = "0.6.0"
 chumsky = "0.9"
