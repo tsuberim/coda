@@ -1,0 +1,3 @@
+-- catch recovers from a failed task
+catch(fail(Oops), \_ -> ok(42))
+-- => 42

@@ -86,8 +86,11 @@ fn run_corpus(path: &str) {
 #[test] fn test_task_fail_propagate() { run_corpus("corpus/task_fail_propagate.coda"); }
 #[test] fn test_task_mixed_bind()     { run_corpus("corpus/task_mixed_bind.coda"); }
 #[test] fn test_task_type_error()     { run_corpus("corpus/task_type_error.coda"); }
-#[test] fn test_task_discard()        { run_corpus("corpus/task_discard.coda"); }
-#[test] fn test_task_toplevel_bind()  { run_corpus("corpus/task_toplevel_bind.coda"); }
+#[test] fn test_task_discard()           { run_corpus("corpus/task_discard.coda"); }
+#[test] fn test_task_toplevel_bind()     { run_corpus("corpus/task_toplevel_bind.coda"); }
+#[test] fn test_task_catch()             { run_corpus("corpus/task_catch.coda"); }
+#[test] fn test_task_catch_inspect()     { run_corpus("corpus/task_catch_inspect.coda"); }
+#[test] fn test_task_catch_passthrough() { run_corpus("corpus/task_catch_passthrough.coda"); }
 #[test] fn test_subtract()            { run_corpus("corpus/subtract.coda"); }
 #[test] fn test_fix()                 { run_corpus("corpus/fix.coda"); }
 #[test] fn test_multiply()            { run_corpus("corpus/multiply.coda"); }

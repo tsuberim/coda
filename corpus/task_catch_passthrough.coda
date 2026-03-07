@@ -1,0 +1,3 @@
+-- catch does not interfere with successful tasks
+catch(ok(42), \_ -> ok(0))
+-- => 42

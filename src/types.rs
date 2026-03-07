@@ -785,6 +785,18 @@ pub fn std_type_env() -> TypeEnv {
         ),
     });
 
+    // catch : ∀a e f. Task a e -> (e -> Task a f) -> Task a f
+    env.insert("catch".into(), Scheme {
+        vars: vec!["a".into(), "e".into(), "f".into()],
+        ty: Type::fun(
+            vec![
+                task(tv("a"), tv("e")),
+                Type::fun(vec![tv("e")], task(tv("a"), tv("f"))),
+            ],
+            task(tv("a"), tv("f")),
+        ),
+    });
+
     // fail : ∀a e. e -> Task a e
     env.insert("fail".into(), Scheme {
         vars: vec!["a".into(), "e".into()],

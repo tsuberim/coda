@@ -1,0 +1,6 @@
+-- catch can inspect the error value
+catch(fail(NotFound), \err ->
+  when err is
+    NotFound -> ok(`recovered`)
+)
+-- => recovered

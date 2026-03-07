@@ -449,6 +449,25 @@ pub fn std_env() -> Env {
         })))
     })));
 
+    // catch(task, handler) — recover from a failed Task.
+    env.set("catch", Value::Builtin("catch".into(), Rc::new(|args| {
+        if args.len() != 2 {
+            return Err(EvalError::ArityMismatch { expected: 2, got: args.len() });
+        }
+        let task = args[0].clone();
+        let handler = args[1].clone();
+        Ok(Value::Task(Rc::new(move || {
+            match run_task(&task) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    let recovery = apply(handler.clone(), vec![e])
+                        .map_err(|e| Value::Tag("EvalError".into(), Box::new(Value::Str(e.to_string()))))?;
+                    run_task(&recovery)
+                }
+            }
+        })))
+    })));
+
     // fail(tag) — create a failed Task with the given error value.
     env.set("fail", Value::Builtin("fail".into(), Rc::new(|args| {
         if args.len() != 1 {
