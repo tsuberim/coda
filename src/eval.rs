@@ -372,8 +372,8 @@ pub fn std_env() -> Env {
         Ok(Value::Task(Rc::new(move || Ok(v.clone()))))
     })));
 
-    // then(task, f) — sequence two Tasks; error type accumulates via row unification.
-    env.set("then", Value::Builtin("then".into(), Rc::new(|args| {
+    // >>=(task, f) — sequence two Tasks; error type accumulates via row unification.
+    env.set(">>=", Value::Builtin(">>=".into(), Rc::new(|args| {
         if args.len() != 2 {
             return Err(EvalError::ArityMismatch { expected: 2, got: args.len() });
         }
@@ -425,8 +425,8 @@ pub fn std_env() -> Env {
 
     // ── List builtins ────────────────────────────────────────────────────────
 
-    // cons(x, xs) — prepend x to xs.
-    env.set("cons", Value::Builtin("cons".into(), Rc::new(|args| {
+    // ::(x, xs) — prepend x to xs.
+    env.set("::", Value::Builtin("::".into(), Rc::new(|args| {
         if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }
         let x = args[0].clone();
         match args[1].clone() {
@@ -520,14 +520,19 @@ pub fn std_env() -> Env {
         Ok(Value::List(items?))
     })));
 
-    // append(xs, ys) — concatenate two lists.
-    env.set("append", Value::Builtin("append".into(), Rc::new(|args| {
+    // <>(xs, ys) — concatenate two lists.
+    env.set("<>", Value::Builtin("<>".into(), Rc::new(|args| {
         if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }
         match (args[0].clone(), args[1].clone()) {
             (Value::List(mut xs), Value::List(ys)) => { xs.extend(ys); Ok(Value::List(xs)) }
             (other, _) => Err(EvalError::TypeMismatch { expected: "List", got: format!("{:?}", other) }),
         }
     })));
+
+    // Aliases: natural names for the symbolic builtins.
+    env.set("then",   env.get(">>=").unwrap());
+    env.set("cons",   env.get("::").unwrap());
+    env.set("append", env.get("<>").unwrap());
 
     env
 }

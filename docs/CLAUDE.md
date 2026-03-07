@@ -125,17 +125,19 @@ Tags with no payload carry an implicit unit payload. Unions are row-polymorphic:
 
 ```
 xs = [1, 2, 3]
-len(xs)                     -- 3
-cons(0, xs)                 -- [0, 1, 2, 3]
-map(\x -> x + x, xs)       -- [2, 4, 6]
+len(xs)                       -- 3
+0 :: xs                       -- [0, 1, 2, 3]
+map(\x -> x + x, xs)         -- [2, 4, 6]
 fold(\acc x -> acc + x, 0, xs)  -- 6
-append([1], [2, 3])         -- [1, 2, 3]
+[1] <> [2, 3]                 -- [1, 2, 3]
 
 -- head and tail return [None | Some val]
 when head(xs) is
   Some x -> x
   None   -> 0
 ```
+
+`::` is also available as `cons`; `<>` as `append`.
 
 All elements must have the same type (inferred). The type is `List(a)`.
 
@@ -190,9 +192,11 @@ Coda has no mutable state or implicit effects. IO is represented as `Task ok err
 
 ```
 ok(v)          -- wrap v in a successful Task  : a -> Task a e
-then(t, f)     -- sequence: run t, pass result to f  : Task a e -> (a -> Task b e) -> Task b e
+t >>= f        -- sequence: run t, pass result to f  : Task a e -> (a -> Task b e) -> Task b e
 fail(e)        -- always-failing Task  : e -> Task a e
 ```
+
+`>>=` is also available as `then`.
 
 ### Monadic bind syntax
 
@@ -230,13 +234,13 @@ Task Str [IoErr Str, NetworkErr Str | r]
 |----------|-----------------------------------------|--------------------------|
 | `++`     | `Str Str -> Str`                        | String concatenation     |
 | `+`      | `Int Int -> Int`                        | Integer addition         |
-| `cons`   | `a -> List(a) -> List(a)`               | Prepend element          |
+| `::` / `cons`   | `a -> List(a) -> List(a)`        | Prepend element          |
 | `head`   | `List(a) -> [None \| Some a]`           | First element            |
 | `tail`   | `List(a) -> [None \| Some List(a)]`     | Rest of list             |
 | `len`    | `List(a) -> Int`                        | Length                   |
 | `map`    | `(a -> b) -> List(a) -> List(b)`        | Transform elements       |
 | `fold`   | `(b -> a -> b) -> b -> List(a) -> b`    | Left fold                |
-| `append`    | `List(a) -> List(a) -> List(a)`         | Concatenate two lists    |
+| `<>` / `append` | `List(a) -> List(a) -> List(a)`     | Concatenate two lists    |
 | `list_of`   | `Int -> a -> List(a)`                   | N copies of a value      |
 | `list_init` | `Int -> (Int -> a) -> List(a)`          | N items via index fn     |
 

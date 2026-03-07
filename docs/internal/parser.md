@@ -34,7 +34,7 @@ Desugars at parse time:
 - `` `hi {x}` `` → `App(Var("++"), [Lit("hi "), x])`
 - `None` → `Tag("None", None)` (payload filled with unit at type-check time)
 - `{name, age: y} = e` → `Bind("#0", e); Bind("name", Field(Var("#0"), "name")); Bind("y", Field(Var("#0"), "age"))` (`#N` is impossible in user syntax)
-- `x <- e` in a block/file → `then(e, \x -> rest)` via right-to-left fold in `desugar_block`; `_` uses a fresh `#N` tmp
+- `x <- e` in a block/file → `e >>= \x -> rest` via right-to-left fold in `desugar_block`; `_` uses a fresh `#N` tmp
 - `[e1, e2, e3]` → `List([e1, e2, e3])` (list literal; `[]` is an empty list)
 
 ## Key design decisions

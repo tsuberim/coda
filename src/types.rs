@@ -767,8 +767,8 @@ pub fn std_type_env() -> TypeEnv {
         ty: Type::fun(vec![tv("a")], task(tv("a"), tv("e"))),
     });
 
-    // then : ∀a b e. Task a e -> (a -> Task b e) -> Task b e
-    env.insert("then".into(), Scheme {
+    // >>= : ∀a b e. Task a e -> (a -> Task b e) -> Task b e
+    env.insert(">>=".into(), Scheme {
         vars: vec!["a".into(), "b".into(), "e".into()],
         ty: Type::fun(
             vec![
@@ -807,8 +807,8 @@ pub fn std_type_env() -> TypeEnv {
         None,
     );
 
-    // cons : ∀a. a -> List a -> List a
-    env.insert("cons".into(), Scheme {
+    // :: : ∀a. a -> List a -> List a
+    env.insert("::".into(), Scheme {
         vars: vec!["a".into()],
         ty: Type::fun(vec![tv("a"), list(tv("a"))], list(tv("a"))),
     });
@@ -864,11 +864,17 @@ pub fn std_type_env() -> TypeEnv {
         ),
     });
 
-    // append : ∀a. List a -> List a -> List a
-    env.insert("append".into(), Scheme {
+    // <> : ∀a. List a -> List a -> List a
+    env.insert("<>".into(), Scheme {
         vars: vec!["a".into()],
         ty: Type::fun(vec![list(tv("a")), list(tv("a"))], list(tv("a"))),
     });
+
+    // Aliases: natural names for the symbolic builtins.
+    for (alias, sym) in [("then", ">>="), ("cons", "::"), ("append", "<>")] {
+        let scheme = env[sym].clone();
+        env.insert(alias.into(), scheme);
+    }
 
     env
 }

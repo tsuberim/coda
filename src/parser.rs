@@ -94,7 +94,7 @@ fn item_parser(
 }
 
 /// Desugar a block's items + final expression into an `Expr`.
-/// `MonadicBind(x, e)` items are folded right-to-left into `then(e, \x -> rest)`.
+/// `MonadicBind(x, e)` items are folded right-to-left into `e >>= \x -> rest`.
 /// Regular items are preserved as `Block` nodes.
 fn desugar_block(items: Vec<BlockItem>, body: Expr) -> Expr {
     if !items.iter().any(|i| matches!(i, BlockItem::MonadicBind(_, _))) {
@@ -102,7 +102,7 @@ fn desugar_block(items: Vec<BlockItem>, body: Expr) -> Expr {
     }
     items.into_iter().rev().fold(body, |acc, item| match item {
         BlockItem::MonadicBind(name, e) => Expr::App(
-            Box::new(Expr::Var("then".into())),
+            Box::new(Expr::Var(">>=".into())),
             vec![e, Expr::Lam(vec![name], Box::new(acc))],
         ),
         BlockItem::Bind(name, e) => Expr::Block(vec![BlockItem::Bind(name, e)], Box::new(acc)),
