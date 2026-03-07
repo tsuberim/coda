@@ -1,0 +1,9 @@
+[package]
+name = "lang"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ariadne = "0.6.0"
+chumsky = "0.9"
+clap = { version = "4.5.60", features = ["derive"] }
