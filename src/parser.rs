@@ -2,7 +2,37 @@ use chumsky::prelude::*;
 
 use crate::ast::*;
 
-const SYM_CHARS: &str = "!@#$%^&*-+=|<>?/~.:";
+const SYM_CHARS: &str = "!@$%^&*-+=|<>?/~.:";
+
+fn line_comment() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    just("--")
+        .then(filter(|c: &char| *c != '\n').repeated())
+        .ignored()
+}
+
+fn block_comment() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    just("---")
+        .then(
+            just("---").not()
+                .then(filter(|_| true))
+                .repeated()
+        )
+        .then(just("---"))
+        .ignored()
+}
+
+fn comment() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    block_comment().or(line_comment())
+}
+
+/// Skips any mix of whitespace and comments.
+fn padding() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    filter(|c: &char| c.is_whitespace())
+        .ignored()
+        .or(comment())
+        .repeated()
+        .ignored()
+}
 
 fn hws() -> impl Parser<char, (), Error = Simple<char>> + Clone {
     filter(|c: &char| *c == ' ' || *c == '\t')
@@ -10,8 +40,18 @@ fn hws() -> impl Parser<char, (), Error = Simple<char>> + Clone {
         .ignored()
 }
 
+fn hws1() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    filter(|c: &char| *c == ' ' || *c == '\t')
+        .repeated()
+        .at_least(1)
+        .ignored()
+}
+
 fn ws1() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    // Any whitespace or comment counts; at least one whitespace char required.
     filter(|c: &char| c.is_whitespace())
+        .ignored()
+        .or(comment())
         .repeated()
         .at_least(1)
         .ignored()
@@ -19,6 +59,7 @@ fn ws1() -> impl Parser<char, (), Error = Simple<char>> + Clone {
 
 fn sep() -> impl Parser<char, (), Error = Simple<char>> + Clone {
     hws()
+        .then(comment().or_not())
         .then(just(';').or(just('\n')))
         .then(filter(|c: &char| c.is_whitespace()).repeated())
         .ignored()
@@ -54,21 +95,132 @@ fn sym_name() -> impl Parser<char, String, Error = Simple<char>> + Clone {
         })
 }
 
+const KEYWORDS: &[&str] = &["when", "is", "otherwise"];
+
+pub fn type_expr_parser() -> impl Parser<char, crate::ast::TypeExpr, Error = Simple<char>> {
+    use crate::ast::TypeExpr;
+    recursive(|te: Recursive<char, TypeExpr, Simple<char>>| {
+        let type_var = filter(|c: &char| c.is_lowercase())
+            .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
+            .map(TypeExpr::Var);
+
+        let type_con = filter(|c: &char| c.is_uppercase())
+            .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
+            .map(TypeExpr::Con);
+
+        let row_var = just('|')
+            .padded_by(hws())
+            .ignore_then(
+                just('*').map(|_| "*".to_string())
+                    .or(
+                        filter(|c: &char| c.is_alphabetic())
+                            .then(filter(|c: &char| c.is_alphanumeric()).repeated())
+                            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
+                    )
+            );
+
+        let type_record_field = filter(|c: &char| c.is_alphabetic() || *c == '_')
+            .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
+            .then_ignore(hws())
+            .then_ignore(just(':'))
+            .then_ignore(hws())
+            .then(te.clone());
+
+        let type_record = type_record_field
+            .padded()
+            .separated_by(just(','))
+            .allow_trailing()
+            .then(row_var.clone().or_not())
+            .delimited_by(just('{'), just('}'))
+            .map(|(fields, row)| TypeExpr::Record(fields, row));
+
+        let type_union_tag = filter(|c: &char| c.is_uppercase())
+            .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
+            .then(
+                // Optional payload type — separated by horizontal whitespace only.
+                hws1()
+                    .ignore_then(
+                        filter(|c: &char| !c.is_whitespace())
+                            .rewind()
+                    )
+                    .ignore_then(te.clone())
+                    .or_not()
+            );
+
+        let type_union = type_union_tag
+            .padded()
+            .separated_by(just(','))
+            .allow_trailing()
+            .then(row_var.or_not())
+            .delimited_by(just('['), just(']'))
+            .map(|(tags, row)| TypeExpr::Union(tags, row));
+
+        let type_parens = te.clone().padded().delimited_by(just('('), just(')'));
+
+        // Atom type: no function arrows.
+        let atom = choice((
+            type_record,
+            type_union,
+            type_parens,
+            type_con,
+            type_var,
+        ));
+
+        // Function type: atom+ -> te, or just atom.
+        // Use hws1() (horizontal-only) between chained atoms so we never consume
+        // a newline and accidentally eat the identifier on the next line.
+        atom.clone()
+            .then(
+                hws1()
+                    .ignore_then(atom.clone())
+                    .repeated()
+            )
+            .then(
+                hws()
+                    .ignore_then(just("->"))
+                    .ignore_then(ws1())
+                    .ignore_then(te.clone())
+                    .or_not()
+            )
+            .map(|((first, rest), ret)| {
+                match ret {
+                    None => {
+                        // No arrow — must be a single atom (extra atoms would be ambiguous).
+                        first
+                    }
+                    Some(ret_ty) => {
+                        let mut params = vec![first];
+                        params.extend(rest);
+                        TypeExpr::Fun(params, Box::new(ret_ty))
+                    }
+                }
+            })
+    })
+}
+
 pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     recursive(|expr: Recursive<char, Expr, Simple<char>>| {
         let ident = filter(|c: &char| c.is_alphabetic() || *c == '_')
             .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
+            .try_map(|s, span| {
+                if KEYWORDS.contains(&s.as_str()) {
+                    Err(Simple::custom(span, format!("`{}` is a keyword", s)))
+                } else {
+                    Ok(s)
+                }
+            });
+
+        // Tag names: capitalized identifier.
+        let tag_name = filter(|c: &char| c.is_uppercase())
+            .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
             .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>());
 
         let digits = text::digits::<char, Simple<char>>(10);
-
-        let float_lit = digits
-            .clone()
-            .then_ignore(just('.'))
-            .then(digits.clone())
-            .map(|(i, f): (String, String)| {
-                Expr::Lit(Lit::Float(format!("{}.{}", i, f).parse().unwrap()))
-            });
 
         let int_lit = digits
             .clone()
@@ -94,7 +246,13 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .map(|parts| match parts.len() {
                 0 => Expr::Lit(Lit::Str(String::new())),
                 1 => parts.into_iter().next().unwrap(),
-                _ => Expr::App(Box::new(Expr::Var("++".into())), parts),
+                // Left-fold into binary ++ calls so the type is Str -> Str -> Str.
+                _ => parts
+                    .into_iter()
+                    .reduce(|acc, part| {
+                        Expr::App(Box::new(Expr::Var("++".into())), vec![acc, part])
+                    })
+                    .unwrap(),
             });
 
         // Lambda: \x y z -> expr
@@ -110,40 +268,125 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(expr.clone())
             .map(|(params, body)| Expr::Lam(params, Box::new(body)));
 
-        // Block body: (name = expr ;)* expr
-        // Empty bindings → just the body expression (grouping).
-        let binding = ident
+        // Block body: (name = expr | name : type ;)* expr
+        let val_binding = ident
             .clone()
             .then_ignore(hws())
             .then_ignore(assign())
             .then_ignore(hws())
-            .then(expr.clone());
+            .then(expr.clone())
+            .map(|(name, e)| BlockItem::Bind(name, e));
 
-        let block_body = binding
+        let ann_binding = ident
+            .clone()
+            .then_ignore(hws())
+            .then_ignore(just(':'))
+            .then_ignore(hws())
+            .then(type_expr_parser())
+            .map(|(name, te)| BlockItem::Ann(name, te))
+            .boxed();
+
+        let block_item = val_binding.boxed().or(ann_binding);
+
+        let block_body = block_item
             .clone()
             .then_ignore(sep())
             .repeated()
             .then(expr.clone())
-            .map(|(bindings, body)| {
-                if bindings.is_empty() {
+            .map(|(items, body)| {
+                if items.is_empty() {
                     body
                 } else {
-                    Expr::Block(bindings, Box::new(body))
+                    Expr::Block(items, Box::new(body))
                 }
             });
 
         let paren_block = block_body.padded().delimited_by(just('('), just(')'));
 
-        // Atom: strips LEADING whitespace only (not trailing).
+        // Record literal: {field: expr, ...}
+        let record_field = ident
+            .clone()
+            .then_ignore(hws())
+            .then_ignore(just(':'))
+            .then_ignore(hws())
+            .then(expr.clone());
+
+        let record = record_field
+            .padded()
+            .separated_by(just(','))
+            .allow_trailing()
+            .delimited_by(just('{'), just('}'))
+            .map(Expr::Record);
+
+        // Tag expression: `Tag` or `Tag atom` (uppercase name + optional atom payload).
+        // If followed by whitespace + non-uppercase, consume as payload.
+        let tag_expr = tag_name.clone()
+            .then(
+                hws1()
+                    .ignore_then(
+                        filter(|c: &char| !c.is_uppercase() && !c.is_whitespace())
+                            .rewind()
+                    )
+                    .ignore_then(expr.clone())
+                    .or_not()
+            )
+            .map(|(name, payload)| Expr::Tag(name, payload.map(Box::new)));
+
+        // Helper: parse a specific keyword (alphabetic token that equals kw).
+        let kw = |kw: &'static str| {
+            filter(|c: &char| c.is_alphabetic() || *c == '_')
+                .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+                .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>())
+                .try_map(move |s, span| {
+                    if s == kw { Ok(()) } else { Err(Simple::custom(span, format!("expected `{}`", kw))) }
+                })
+        };
+
+        let branch = tag_name.clone()
+            .then_ignore(hws())
+            .then(ident.clone().then_ignore(hws()).or_not())
+            .then_ignore(just("->"))
+            .then_ignore(hws())
+            .then(expr.clone())
+            .map(|((tag, binding), body)| (tag, binding, Box::new(body)));
+
+        let otherwise_branch = kw("otherwise")
+            .ignore_then(ws1())
+            .ignore_then(expr.clone());
+
+        let when_expr = kw("when")
+            .ignore_then(ws1())
+            .ignore_then(expr.clone())
+            .then_ignore(ws1())
+            .then_ignore(kw("is"))
+            // First branch: sep (`;`/newline) or plain whitespace (inline).
+            .then_ignore(sep().or(ws1()))
+            .then(
+                branch.clone()
+                    .then(sep().ignore_then(branch.clone()).repeated())
+                    .map(|(first, rest)| std::iter::once(first).chain(rest).collect::<Vec<_>>())
+            )
+            .then(sep().ignore_then(otherwise_branch).or_not())
+            .map(|((scrutinee, branches), otherwise)| {
+                Expr::When(Box::new(scrutinee), branches, otherwise.map(Box::new))
+            });
+
+        // Atom: strips LEADING whitespace and comments only (not trailing).
         // Trailing whitespace must remain for the infix `ws1` check.
-        let leading_ws = filter(|c: &char| c.is_whitespace()).repeated().ignored();
+        let leading_ws = filter(|c: &char| c.is_whitespace())
+            .ignored()
+            .or(comment())
+            .repeated()
+            .ignored();
 
         let atom = leading_ws.ignore_then(choice((
-            float_lit,
             int_lit,
             template,
             lambda,
+            when_expr,
+            record,
             paren_block,
+            tag_expr,
             ident.clone().map(Expr::Var),
             sym_name().map(Expr::Var),
         )));
@@ -156,12 +399,24 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .allow_trailing()
             .delimited_by(just('('), just(')'));
 
+        // Field access: .field — no whitespace before `.`
+        let field = just('.').ignore_then(ident.clone());
+
+        // Postfix chain: application and field access, left-associative.
+        enum Postfix { Call(Vec<Expr>), Field(String) }
         let app = atom
-            .then(args.repeated())
-            .map(|(f, arg_lists)| {
-                arg_lists
-                    .into_iter()
-                    .fold(f, |f, args| Expr::App(Box::new(f), args))
+            .then(
+                choice((
+                    args.map(Postfix::Call),
+                    field.map(Postfix::Field),
+                ))
+                .repeated(),
+            )
+            .map(|(e, ops)| {
+                ops.into_iter().fold(e, |acc, op| match op {
+                    Postfix::Call(args) => Expr::App(Box::new(acc), args),
+                    Postfix::Field(name) => Expr::Field(Box::new(acc), name),
+                })
             });
 
         // Infix: app (ws1 sym ws1 app)* — desugars to App(Var(op), [lhs, rhs])
@@ -182,10 +437,12 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     })
 }
 
-/// A single REPL input: either a binding (`name = expr`) or a bare expression.
+/// A single REPL input: a value binding, a type annotation, a bare expression, or nothing.
 pub enum ReplInput {
     Binding(String, Expr),
+    Ann(String, crate::ast::TypeExpr),
     Expr(Expr),
+    Nop,
 }
 
 pub fn repl_parser() -> impl Parser<char, ReplInput, Error = Simple<char>> {
@@ -194,42 +451,65 @@ pub fn repl_parser() -> impl Parser<char, ReplInput, Error = Simple<char>> {
         .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>());
 
     let binding = ident
+        .clone()
         .then_ignore(hws())
         .then_ignore(assign())
         .then_ignore(hws())
         .then(expr_parser())
         .map(|(name, expr)| ReplInput::Binding(name, expr));
 
-    binding
-        .or(expr_parser().map(ReplInput::Expr))
-        .padded()
-        .then_ignore(end())
+    let ann = ident
+        .then_ignore(hws())
+        .then_ignore(just(':'))
+        .then_ignore(hws())
+        .then(type_expr_parser())
+        .map(|(name, te)| ReplInput::Ann(name, te));
+
+    padding().ignore_then(
+        binding
+            .or(ann)
+            .or(expr_parser().map(ReplInput::Expr))
+            .or(end().map(|_| ReplInput::Nop))
+    )
+    .then_ignore(padding())
+    .then_ignore(end())
 }
 
 /// Parse a complete file (top-level block without surrounding parens).
 pub fn file_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
-    let binding = {
-        let ident = filter(|c: &char| c.is_alphabetic() || *c == '_')
-            .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
-            .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>());
-        ident
-            .then_ignore(hws())
-            .then_ignore(assign())
-            .then_ignore(hws())
-            .then(expr_parser())
-    };
+    let ident = filter(|c: &char| c.is_alphabetic() || *c == '_')
+        .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+        .map(|(h, t): (char, Vec<char>)| std::iter::once(h).chain(t).collect::<String>());
 
-    binding
+    let val_item = ident
+        .clone()
+        .then_ignore(hws())
+        .then_ignore(assign())
+        .then_ignore(hws())
+        .then(expr_parser())
+        .map(|(name, e)| BlockItem::Bind(name, e));
+
+    let ann_item = ident
+        .clone()
+        .then_ignore(hws())
+        .then_ignore(just(':'))
+        .then_ignore(hws())
+        .then(type_expr_parser())
+        .map(|(name, te)| BlockItem::Ann(name, te));
+
+    let item = val_item.or(ann_item);
+
+    item
         .then_ignore(sep())
         .repeated()
         .then(expr_parser())
-        .map(|(bindings, body)| {
-            if bindings.is_empty() {
+        .map(|(items, body)| {
+            if items.is_empty() {
                 body
             } else {
-                Expr::Block(bindings, Box::new(body))
+                Expr::Block(items, Box::new(body))
             }
         })
-        .padded()
+        .padded_by(padding())
         .then_ignore(end())
 }

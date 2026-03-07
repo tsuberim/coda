@@ -19,16 +19,12 @@ fn run_err(src: &str) -> EvalError {
 }
 
 fn int(n: i64) -> Value { Value::Int(n) }
-fn float(f: f64) -> Value { Value::Float(f) }
 fn str_(s: &str) -> Value { Value::Str(s.into()) }
 
 // ── literals ──────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_int_lit() { assert_eq!(run("42"), int(42)); }
-
-#[test]
-fn test_float_lit() { assert_eq!(run("3.14"), float(3.14)); }
 
 #[test]
 fn test_str_lit() { assert_eq!(run("`hello`"), str_("hello")); }
@@ -40,9 +36,6 @@ fn test_empty_str() { assert_eq!(run("``"), str_("")); }
 
 #[test]
 fn test_add_int() { assert_eq!(run("1 + 2"), int(3)); }
-
-#[test]
-fn test_add_float() { assert_eq!(run("1.5 + 2.5"), float(4.0)); }
 
 #[test]
 fn test_add_left_assoc() { assert_eq!(run("1 + 2 + 3"), int(6)); }

@@ -1,0 +1,6 @@
+-- Annotating an Int binding as Str should be a type error.
+x = 5
+x : Str
+
+x
+-- !> TYPE ERROR

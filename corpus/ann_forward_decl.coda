@@ -1,0 +1,7 @@
+-- Annotate a name before its binding is defined.
+-- The annotation constrains the subsequent binding.
+greet : Str -> Str
+greet = \name -> `hello, {name}`
+
+greet(`world`)
+-- => hello, world

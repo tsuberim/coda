@@ -1,0 +1,10 @@
+bump_age = \person -> {
+  name: person.name,
+  age: person.age + 1
+}
+
+alice = { name: `alice`, age: 30 }
+bob   = bump_age(alice)
+
+bob.age
+-- => 31

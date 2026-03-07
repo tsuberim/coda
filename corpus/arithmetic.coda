@@ -1,0 +1,7 @@
+double = \x -> x + x
+square = \x -> x + x + x + x
+
+x = double(3)   -- 6
+y = square(2)   -- 8
+x + y
+-- => 14

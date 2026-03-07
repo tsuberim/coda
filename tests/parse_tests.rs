@@ -18,15 +18,15 @@ fn parse_file(src: &str) -> Expr {
 
 fn var(s: &str) -> Expr { Expr::Var(s.into()) }
 fn int(n: i64) -> Expr { Expr::Lit(Lit::Int(n)) }
-fn float(f: f64) -> Expr { Expr::Lit(Lit::Float(f)) }
 fn str_(s: &str) -> Expr { Expr::Lit(Lit::Str(s.into())) }
 fn app(f: Expr, args: Vec<Expr>) -> Expr { Expr::App(Box::new(f), args) }
 fn lam(params: Vec<&str>, body: Expr) -> Expr {
     Expr::Lam(params.iter().map(|s| s.to_string()).collect(), Box::new(body))
 }
 fn block(bindings: Vec<(&str, Expr)>, body: Expr) -> Expr {
+    use lang::ast::BlockItem;
     Expr::Block(
-        bindings.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        bindings.into_iter().map(|(k, v)| BlockItem::Bind(k.into(), v)).collect(),
         Box::new(body),
     )
 }
@@ -61,11 +61,6 @@ fn test_int() {
 }
 
 #[test]
-fn test_float() {
-    assert_eq!(parse_expr("3.14"), float(3.14));
-}
-
-#[test]
 fn test_string_plain() {
     assert_eq!(parse_expr("`hello`"), str_("hello"));
 }
@@ -88,10 +83,13 @@ fn test_template_interp() {
 
 #[test]
 fn test_template_multi_interp() {
-    // `{a} and {b}` → ++(a, Lit(" and "), b)
+    // `{a} and {b}` → ++( ++(a, " and "), b )  — left-folded binary ++
     assert_eq!(
         parse_expr("`{a} and {b}`"),
-        app(var("++"), vec![var("a"), str_(" and "), var("b")])
+        app(var("++"), vec![
+            app(var("++"), vec![var("a"), str_(" and ")]),
+            var("b"),
+        ])
     );
 }
 

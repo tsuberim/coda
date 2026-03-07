@@ -1,0 +1,13 @@
+map_option = \opt f ->
+  when opt is
+    Some x -> Some (f(x))
+    None   -> None
+
+with_default = \opt default ->
+  when opt is
+    Some x -> x
+    None   -> default
+
+doubled = map_option(Some 21, \x -> x + x)
+with_default(doubled, 0)
+-- => 42

@@ -1,0 +1,23 @@
+describe = \shape ->
+  when shape is
+    Circle -> `circle`
+    Rect   -> `rectangle`
+    otherwise `unknown shape`
+
+classify = \n ->
+  when n is
+    Pos x -> x + 1
+    Zero  -> 0
+    Neg x -> x + 100
+
+a = describe(Circle)
+b = describe(Rect)
+c = describe(Triangle)
+
+shapes = a ++ `, ` ++ b ++ `, ` ++ c
+
+p = classify(Pos 5)
+z = classify(Zero)
+
+p + z
+-- => 6

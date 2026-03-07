@@ -6,6 +6,7 @@ use colored::Colorize;
 use lang::{
     eval::{eval, std_env},
     parser::{file_parser, repl_parser, ReplInput},
+    types::{infer, infer_scheme, std_type_env},
 };
 
 #[derive(Parser)]
@@ -39,15 +40,18 @@ fn print_help() {
     println!("  {}", "A purely functional, HM-typed language.".dimmed());
     println!();
     println!("  {}", "Syntax".bold().underline());
-    println!("  {}  lambda          {}  \\x y -> x + y", "\\x ->".bright_cyan(), "—".dimmed());
-    println!("  {}    application   {}  f(x, y)", "f(x)".bright_cyan(), "—".dimmed());
-    println!("  {}    infix         {}  1 + 2", "a + b".bright_cyan(), "—".dimmed());
-    println!("  {}  template str  {}  `hi {{name}}`", "`...`".bright_cyan(), "—".dimmed());
-    println!("  {}    block         {}  (x = 1; x + 1)", "(x=e; e)".bright_cyan(), "—".dimmed());
+    println!("  {}    lambda          {}  \\x y -> x + y", "\\x ->".bright_cyan(), "—".dimmed());
+    println!("  {}      application   {}  f(x, y)", "f(x)".bright_cyan(), "—".dimmed());
+    println!("  {}      infix         {}  1 + 2", "a + b".bright_cyan(), "—".dimmed());
+    println!("  {}    template str  {}  `hi {{name}}`", "`...`".bright_cyan(), "—".dimmed());
+    println!("  {}      block         {}  (x = 1; x + 1)", "(x=e; e)".bright_cyan(), "—".dimmed());
+    println!("  {}      annotation    {}  f : Int -> Int", "x : T".bright_cyan(), "—".dimmed());
+    println!("  {}      comment", "--".bright_cyan());
+    println!("  {}  multiline comment", "--- ... ---".bright_cyan());
     println!();
     println!("  {}", "Builtins".bold().underline());
-    println!("  {}   string concat (strings only)", "++".bright_cyan());
-    println!("  {}    numeric addition", "+".bright_cyan());
+    println!("  {} {} {}   string concat", "++".bright_cyan(), ":".dimmed(), "Str Str -> Str".bright_blue());
+    println!("  {} {} {}   integer addition", "+".bright_cyan(), ":".dimmed(), "Int Int -> Int".bright_blue());
     println!();
     println!("  {}  {}    {}  {}", "Ctrl-D".bright_yellow(), "exit", "↑↓".bright_yellow(), "history");
     println!();
@@ -59,12 +63,23 @@ fn repl() {
     print_help();
 
     let env = std_env();
+    let mut type_env = std_type_env();
     let mut rl = DefaultEditor::new().expect("failed to init readline");
     let prompt = format!("{} ", "›".bright_magenta().bold());
+
+    let history_path = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("coda")
+        .join("history");
+    if let Some(parent) = history_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    rl.load_history(&history_path).ok();
 
     loop {
         match rl.readline(&prompt) {
             Err(ReadlineError::Eof | ReadlineError::Interrupted) => {
+                rl.save_history(&history_path).ok();
                 println!("{}", "bye".dimmed());
                 break;
             }
@@ -80,19 +95,52 @@ fn repl() {
                             eprintln!("{} {e}", "parse error:".red().bold());
                         }
                     }
-                    Ok(ReplInput::Binding(name, expr)) => {
-                        match eval(&expr, &env) {
-                            Ok(val) => {
-                                println!("{} {} {}", name.bright_cyan(), "=".dimmed(), val.pretty());
-                                env.set(&name, val);
+                    Ok(ReplInput::Nop) => {}
+                    Ok(ReplInput::Ann(name, te)) => {
+                        match lang::types::apply_ann(&type_env, &name, &te) {
+                            Ok(scheme) => {
+                                let display = lang::types::normalize_ty(scheme.ty.clone());
+                                println!(
+                                    "{} {} {}",
+                                    name.bright_cyan(),
+                                    ":".dimmed(),
+                                    display.pretty(),
+                                );
+                                type_env.insert(name.clone(), scheme);
                             }
-                            Err(e) => eprintln!("{} {e}", "error:".red().bold()),
+                            Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
+                        }
+                    }
+                    Ok(ReplInput::Binding(name, expr)) => {
+                        let type_result = infer_scheme(&type_env, &expr)
+                            .and_then(|s| lang::types::enforce_binding(&type_env, &name, s));
+                        match type_result {
+                            Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
+                            Ok(scheme) => match eval(&expr, &env) {
+                                Ok(val) => {
+                                    let display_ty = scheme.ty.clone();
+                                    println!(
+                                        "{} {} {} {} {}",
+                                        name.bright_cyan(),
+                                        "=".dimmed(),
+                                        val.pretty(),
+                                        ":".dimmed(),
+                                        display_ty.pretty(),
+                                    );
+                                    type_env.insert(name.clone(), scheme);
+                                    env.set(&name, val);
+                                }
+                                Err(e) => eprintln!("{} {e}", "error:".red().bold()),
+                            }
                         }
                     }
                     Ok(ReplInput::Expr(expr)) => {
-                        match eval(&expr, &env) {
-                            Ok(val) => println!("{}", val.pretty()),
-                            Err(e) => eprintln!("{} {e}", "error:".red().bold()),
+                        match infer(&type_env, &expr) {
+                            Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
+                            Ok(ty) => match eval(&expr, &env) {
+                                Ok(val) => println!("{} {} {}", val.pretty(), ":".dimmed(), ty.pretty()),
+                                Err(e) => eprintln!("{} {e}", "error:".red().bold()),
+                            }
                         }
                     }
                 }
@@ -103,14 +151,18 @@ fn repl() {
 
 fn interpret(path: PathBuf) {
     let src = read_file(&path);
-    match file_parser().parse(src.as_str()) {
-        Ok(ast) => match eval(&ast, &std_env()) {
-            Ok(val) => println!("{}", val),
-            Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
-        },
+    let ast = match file_parser().parse(src.as_str()) {
+        Ok(ast) => ast,
         Err(errs) => {
             for e in errs { eprintln!("{}:parse error: {e}", path.display()); }
             std::process::exit(1);
+        }
+    };
+    match infer(&std_type_env(), &ast) {
+        Err(e) => { eprintln!("type error: {e}"); std::process::exit(1); }
+        Ok(ty) => match eval(&ast, &std_env()) {
+            Ok(val) => println!("{} : {}", val, ty),
+            Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
         }
     }
 }

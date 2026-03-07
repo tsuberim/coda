@@ -1,0 +1,6 @@
+-- Annotating a name as Int, then binding it to a Str, should fail.
+x : Int
+x = ``
+
+x
+-- !> TYPE ERROR

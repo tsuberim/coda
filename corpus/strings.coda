@@ -1,0 +1,6 @@
+greet = \name -> `hello, {name}!`
+shout = \s -> s ++ `!!!`
+
+msg = greet(`world`)
+shout(msg)
+-- => hello, world!!!!

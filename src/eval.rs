@@ -9,8 +9,10 @@ use crate::ast::*;
 #[derive(Clone)]
 pub enum Value {
     Int(i64),
-    Float(f64),
     Str(String),
+    Record(Vec<(String, Value)>),
+    /// Tag always carries a payload; unit payload = Record([]).
+    Tag(String, Box<Value>),
     Closure {
         params: Vec<String>,
         body: Box<Expr>,
@@ -23,8 +25,9 @@ impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Record(a), Value::Record(b)) => a == b,
+            (Value::Tag(t1, v1), Value::Tag(t2, v2)) => t1 == t2 && v1 == v2,
             _ => false,
         }
     }
@@ -34,8 +37,15 @@ impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Int(n) => write!(f, "{}", n),
-            Value::Float(n) => write!(f, "{}", n),
             Value::Str(s) => write!(f, "{:?}", s),
+            Value::Record(fields) => {
+                let pairs: Vec<_> = fields.iter().map(|(k, v)| format!("{}: {:?}", k, v)).collect();
+                write!(f, "{{{}}}", pairs.join(", "))
+            }
+            Value::Tag(tag, payload) => match payload.as_ref() {
+                Value::Record(fields) if fields.is_empty() => write!(f, "{}", tag),
+                p => write!(f, "{} {:?}", tag, p),
+            },
             Value::Closure { params, .. } => write!(f, "<fn/{}>", params.len()),
             Value::Builtin(name, _) => write!(f, "<builtin:{}>", name),
         }
@@ -46,8 +56,15 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Int(n) => write!(f, "{}", n),
-            Value::Float(n) => write!(f, "{}", n),
             Value::Str(s) => write!(f, "{}", s),
+            Value::Record(fields) => {
+                let pairs: Vec<_> = fields.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
+                write!(f, "{{{}}}", pairs.join(", "))
+            }
+            Value::Tag(tag, payload) => match payload.as_ref() {
+                Value::Record(fields) if fields.is_empty() => write!(f, "{}", tag),
+                p => write!(f, "{} {}", tag, p),
+            },
             Value::Closure { params, .. } => write!(f, "<fn/{}>", params.len()),
             Value::Builtin(name, _) => write!(f, "<builtin:{}>", name),
         }
@@ -59,14 +76,19 @@ impl Value {
     pub fn pretty(&self) -> String {
         match self {
             Value::Int(n) => n.to_string().yellow().to_string(),
-            Value::Float(n) => n.to_string().yellow().to_string(),
             Value::Str(s) => format!("{:?}", s).green().to_string(),
-            Value::Closure { params, .. } => {
-                format!("<fn/{}>", params.len()).cyan().to_string()
+            Value::Record(fields) => {
+                let pairs: Vec<_> = fields.iter()
+                    .map(|(k, v)| format!("{}: {}", k.bright_white(), v.pretty()))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
             }
-            Value::Builtin(name, _) => {
-                format!("<builtin:{}>", name).cyan().to_string()
-            }
+            Value::Tag(tag, payload) => match payload.as_ref() {
+                Value::Record(fields) if fields.is_empty() => tag.bright_yellow().to_string(),
+                p => format!("{} {}", tag.bright_yellow(), p.pretty()),
+            },
+            Value::Closure { params, .. } => format!("<fn/{}>", params.len()).cyan().to_string(),
+            Value::Builtin(name, _) => format!("<builtin:{}>", name).cyan().to_string(),
         }
     }
 }
@@ -116,6 +138,8 @@ pub enum EvalError {
     UnboundVar(String),
     TypeMismatch { expected: &'static str, got: String },
     ArityMismatch { expected: usize, got: usize },
+    NoSuchField(String),
+    NoMatchingBranch(String),
 }
 
 impl fmt::Display for EvalError {
@@ -128,6 +152,8 @@ impl fmt::Display for EvalError {
             EvalError::ArityMismatch { expected, got } => {
                 write!(f, "arity error: expected {} args, got {}", expected, got)
             }
+            EvalError::NoSuchField(name) => write!(f, "no such field: {}", name),
+            EvalError::NoMatchingBranch(tag) => write!(f, "no matching branch for tag: {}", tag),
         }
     }
 }
@@ -138,7 +164,6 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
     match expr {
         Expr::Lit(lit) => Ok(match lit {
             Lit::Int(n) => Value::Int(*n),
-            Lit::Float(f) => Value::Float(*f),
             Lit::Str(s) => Value::Str(s.clone()),
         }),
 
@@ -161,15 +186,72 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
             apply(f_val, arg_vals)
         }
 
-        Expr::Block(bindings, body) => {
-            // Each binding is evaluated in the env of all *previous* bindings —
-            // no self-reference, no mutual recursion (Y-combinator for that).
+        Expr::Record(fields) => {
+            let evaled = fields.iter()
+                .map(|(k, e)| eval(e, env).map(|v| (k.clone(), v)))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Value::Record(evaled))
+        }
+
+        Expr::Field(expr, name) => {
+            match eval(expr, env)? {
+                Value::Record(fields) => fields.into_iter()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v)
+                    .ok_or_else(|| EvalError::NoSuchField(name.clone())),
+                other => Err(EvalError::TypeMismatch {
+                    expected: "record",
+                    got: format!("{:?}", other),
+                }),
+            }
+        }
+
+        Expr::Tag(name, payload) => {
+            let payload_val = match payload {
+                Some(e) => eval(e, env)?,
+                None => Value::Record(vec![]),  // unit
+            };
+            Ok(Value::Tag(name.clone(), Box::new(payload_val)))
+        }
+
+        Expr::When(scrutinee, branches, otherwise) => {
+            match eval(scrutinee, env)? {
+                Value::Tag(tag, payload) => {
+                    for (branch_tag, binding, body) in branches {
+                        if &tag == branch_tag {
+                            let frame = env.extend();
+                            if let Some(b) = binding {
+                                frame.set(b, *payload);
+                            }
+                            return eval(body, &frame);
+                        }
+                    }
+                    if let Some(otherwise_body) = otherwise {
+                        return eval(otherwise_body, env);
+                    }
+                    Err(EvalError::NoMatchingBranch(tag))
+                }
+                other => Err(EvalError::TypeMismatch {
+                    expected: "tag",
+                    got: format!("{:?}", other),
+                }),
+            }
+        }
+
+        Expr::Block(items, body) => {
+            // Annotations are skipped — accessing an annotated-but-unbound name
+            // blows up at runtime with UnboundVar.
             let mut cur = env.clone();
-            for (name, expr) in bindings {
-                let val = eval(expr, &cur)?;
-                let next = cur.extend();
-                next.set(name, val);
-                cur = next;
+            for item in items {
+                match item {
+                    crate::ast::BlockItem::Bind(name, expr) => {
+                        let val = eval(expr, &cur)?;
+                        let next = cur.extend();
+                        next.set(name, val);
+                        cur = next;
+                    }
+                    crate::ast::BlockItem::Ann(_, _) => {}
+                }
             }
             eval(body, &cur)
         }
@@ -219,16 +301,15 @@ pub fn std_env() -> Env {
         Ok(Value::Str(out))
     })));
 
-    // Numeric addition.
+    // Integer addition.
     env.set("+", Value::Builtin("+".into(), Rc::new(|args| {
         if args.len() != 2 {
             return Err(EvalError::ArityMismatch { expected: 2, got: args.len() });
         }
         match (&args[0], &args[1]) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
             (a, b) => Err(EvalError::TypeMismatch {
-                expected: "two numbers of the same type",
+                expected: "Int Int",
                 got: format!("{:?} and {:?}", a, b),
             }),
         }

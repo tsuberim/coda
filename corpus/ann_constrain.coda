@@ -1,0 +1,7 @@
+-- Annotating a polymorphic binding with a concrete type is fine —
+-- it just specialises the scheme.
+id = \x -> x
+id : Int -> Int
+
+id(99)
+-- => 99

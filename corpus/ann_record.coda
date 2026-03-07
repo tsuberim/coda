@@ -1,0 +1,6 @@
+-- Annotate a record-typed binding and verify it type-checks.
+point : {x: Int, y: Int}
+point = {x: 3, y: 4}
+
+point.x + point.y
+-- => 7

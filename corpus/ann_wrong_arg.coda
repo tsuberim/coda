@@ -1,0 +1,7 @@
+-- Annotating a function with an incompatible signature is a type error.
+-- add works on Int; annotating it as Str -> Str -> Str should fail.
+add = \x y -> x + y
+add : Str -> Str -> Str
+
+add(`a`, `b`)
+-- !> TYPE ERROR

@@ -1,0 +1,9 @@
+-- Annotate a function that works on a closed union.
+unwrap : [Some Int, None] -> Int
+unwrap = \v ->
+  when v is
+    Some x -> x
+    None   -> 0
+
+unwrap(Some 41) + unwrap(None)
+-- => 41
