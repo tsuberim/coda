@@ -221,15 +221,23 @@ fn repl() {
                         match infer(&type_env, &expr) {
                             Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
                             Ok(ty) => match eval(&expr, &env) {
-                                Ok(Value::Task(ref f)) => match f() {
-                                    Ok(result) => {
-                                        let unit = Value::Record(vec![]);
-                                        if result != unit {
-                                            println!("{}", result.pretty());
+                                Ok(Value::Task(ref f)) => {
+                                    let (ok_ty, err_ty) = match &ty {
+                                        lang::types::Type::Con(n, args) if n == "Task" && args.len() == 2 => {
+                                            (lang::types::normalize_ty(args[0].clone()), lang::types::normalize_ty(args[1].clone()))
                                         }
+                                        _ => (lang::types::normalize_ty(ty.clone()), lang::types::normalize_ty(ty.clone())),
+                                    };
+                                    match f() {
+                                        Ok(result) => {
+                                            let unit = Value::Record(vec![]);
+                                            if result != unit {
+                                                println!("{} {} {}", result.pretty(), ":".dimmed(), ok_ty.pretty());
+                                            }
+                                        }
+                                        Err(err_val) => eprintln!("{} {} {} {}", "task failed:".red().bold(), err_val, ":".dimmed(), err_ty.pretty()),
                                     }
-                                    Err(err_val) => eprintln!("{} {}", "task failed:".red().bold(), err_val),
-                                },
+                                }
                                 Ok(val) => println!("{} {} {}", val.pretty(), ":".dimmed(), ty.pretty()),
                                 Err(e) => eprintln!("{} {e}", "error:".red().bold()),
                             }
