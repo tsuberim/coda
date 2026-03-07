@@ -99,3 +99,5 @@ fn run_corpus(path: &str) {
 #[test] fn test_list_append()     { run_corpus("corpus/list_append.coda"); }
 #[test] fn test_list_ann()        { run_corpus("corpus/list_ann.coda"); }
 #[test] fn test_list_type_error() { run_corpus("corpus/list_type_error.coda"); }
+#[test] fn test_list_init()       { run_corpus("corpus/list_init.coda"); }
+#[test] fn test_list_of()         { run_corpus("corpus/list_of.coda"); }

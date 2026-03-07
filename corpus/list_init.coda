@@ -1,0 +1,3 @@
+-- list_init creates a list by calling f(i) for each index
+list_init(4, \i -> i + i)
+-- => [0, 2, 4, 6]

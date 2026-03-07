@@ -849,6 +849,21 @@ pub fn std_type_env() -> TypeEnv {
         ),
     });
 
+    // list_of : ∀a. Int -> a -> List a
+    env.insert("list_of".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(vec![Type::int(), tv("a")], list(tv("a"))),
+    });
+
+    // list_init : ∀a. Int -> (Int -> a) -> List a
+    env.insert("list_init".into(), Scheme {
+        vars: vec!["a".into()],
+        ty: Type::fun(
+            vec![Type::int(), Type::fun(vec![Type::int()], tv("a"))],
+            list(tv("a")),
+        ),
+    });
+
     // append : ∀a. List a -> List a -> List a
     env.insert("append".into(), Scheme {
         vars: vec!["a".into()],

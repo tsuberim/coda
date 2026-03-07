@@ -496,6 +496,30 @@ pub fn std_env() -> Env {
         }
     })));
 
+    // list_of(n, v) — create a list of length n filled with v.
+    env.set("list_of", Value::Builtin("list_of".into(), Rc::new(|args| {
+        if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }
+        let n = match &args[0] {
+            Value::Int(n) => *n,
+            other => return Err(EvalError::TypeMismatch { expected: "Int", got: format!("{:?}", other) }),
+        };
+        Ok(Value::List(vec![args[1].clone(); n as usize]))
+    })));
+
+    // list_init(n, f) — create a list of length n by calling f(i) for each index i.
+    env.set("list_init", Value::Builtin("list_init".into(), Rc::new(|args| {
+        if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }
+        let n = match &args[0] {
+            Value::Int(n) => *n,
+            other => return Err(EvalError::TypeMismatch { expected: "Int", got: format!("{:?}", other) }),
+        };
+        let f = args[1].clone();
+        let items: Result<Vec<Value>, EvalError> = (0..n)
+            .map(|i| apply(f.clone(), vec![Value::Int(i)]))
+            .collect();
+        Ok(Value::List(items?))
+    })));
+
     // append(xs, ys) — concatenate two lists.
     env.set("append", Value::Builtin("append".into(), Rc::new(|args| {
         if args.len() != 2 { return Err(EvalError::ArityMismatch { expected: 2, got: args.len() }); }

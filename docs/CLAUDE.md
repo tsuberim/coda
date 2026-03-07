@@ -236,7 +236,9 @@ Task Str [IoErr Str, NetworkErr Str | r]
 | `len`    | `List(a) -> Int`                        | Length                   |
 | `map`    | `(a -> b) -> List(a) -> List(b)`        | Transform elements       |
 | `fold`   | `(b -> a -> b) -> b -> List(a) -> b`    | Left fold                |
-| `append` | `List(a) -> List(a) -> List(a)`         | Concatenate two lists    |
+| `append`    | `List(a) -> List(a) -> List(a)`         | Concatenate two lists    |
+| `list_of`   | `Int -> a -> List(a)`                   | N copies of a value      |
+| `list_init` | `Int -> (Int -> a) -> List(a)`          | N items via index fn     |
 
 ## Implementation docs
 
