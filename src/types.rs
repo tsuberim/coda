@@ -256,6 +256,7 @@ pub enum TypeError {
     NotAUnion(Type),
     /// `otherwise` branch is dead: scrutinee is a closed union with all tags covered.
     DeadOtherwise,
+    ModuleError(String),
 }
 
 impl fmt::Display for TypeError {
@@ -268,6 +269,7 @@ impl fmt::Display for TypeError {
             TypeError::NoSuchField(name, t) => write!(f, "no field `{}` in {}", name, t),
             TypeError::NotAUnion(t) => write!(f, "expected union, got {}", t),
             TypeError::DeadOtherwise => write!(f, "dead `otherwise`: scrutinee is a closed union"),
+            TypeError::ModuleError(msg) => write!(f, "module error: {}", msg),
         }
     }
 }
@@ -618,6 +620,12 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
             }
 
             Ok((s.clone(), apply_subst(&s, &ret)))
+        }
+
+        Expr::Import(path) => {
+            let ty = crate::module::load_module(path)
+                .map_err(TypeError::ModuleError)?.ty;
+            Ok((Subst::new(), ty))
         }
 
         Expr::Block(items, body) => {

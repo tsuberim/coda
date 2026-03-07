@@ -57,4 +57,6 @@ fn run_corpus(path: &str) {
 #[test] fn test_ann_tag()           { run_corpus("corpus/ann_tag.coda"); }
 #[test] fn test_ann_conflict()      { run_corpus("corpus/ann_conflict.coda"); }
 #[test] fn test_ann_bind_conflict() { run_corpus("corpus/ann_bind_conflict.coda"); }
+#[test] fn test_modules()           { run_corpus("corpus/modules.coda"); }
+#[test] fn test_destructure()       { run_corpus("corpus/destructure.coda"); }
 #[test] fn test_ann_wrong_arg()     { run_corpus("corpus/ann_wrong_arg.coda"); }

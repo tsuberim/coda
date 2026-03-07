@@ -4,6 +4,7 @@ use chumsky::Parser as _;
 use clap::Parser;
 use colored::Colorize;
 use lang::{
+    ast::BlockItem,
     eval::{eval, std_env},
     parser::{file_parser, repl_parser, ReplInput},
     types::{infer, infer_scheme, std_type_env},
@@ -52,6 +53,7 @@ fn print_help() {
     println!("  {}", "Builtins".bold().underline());
     println!("  {} {} {}   string concat", "++".bright_cyan(), ":".dimmed(), "Str Str -> Str".bright_blue());
     println!("  {} {} {}   integer addition", "+".bright_cyan(), ":".dimmed(), "Int Int -> Int".bright_blue());
+    println!("  {}  {}  {}  import module (cached)", "import `path`".bright_cyan(), ":".dimmed(), "keyword".bright_blue());
     println!();
     println!("  {}  {}    {}  {}", "Ctrl-D".bright_yellow(), "exit", "↑↓".bright_yellow(), "history");
     println!();
@@ -96,41 +98,59 @@ fn repl() {
                         }
                     }
                     Ok(ReplInput::Nop) => {}
-                    Ok(ReplInput::Ann(name, te)) => {
-                        match lang::types::apply_ann(&type_env, &name, &te) {
-                            Ok(scheme) => {
-                                let display = lang::types::normalize_ty(scheme.ty.clone());
-                                println!(
-                                    "{} {} {}",
-                                    name.bright_cyan(),
-                                    ":".dimmed(),
-                                    display.pretty(),
-                                );
-                                type_env.insert(name.clone(), scheme);
-                            }
-                            Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
-                        }
-                    }
-                    Ok(ReplInput::Binding(name, expr)) => {
-                        let type_result = infer_scheme(&type_env, &expr)
-                            .and_then(|s| lang::types::enforce_binding(&type_env, &name, s));
-                        match type_result {
-                            Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
-                            Ok(scheme) => match eval(&expr, &env) {
-                                Ok(val) => {
-                                    let display_ty = scheme.ty.clone();
-                                    println!(
-                                        "{} {} {} {} {}",
-                                        name.bright_cyan(),
-                                        "=".dimmed(),
-                                        val.pretty(),
-                                        ":".dimmed(),
-                                        display_ty.pretty(),
-                                    );
-                                    type_env.insert(name.clone(), scheme);
-                                    env.set(&name, val);
+                    Ok(ReplInput::Items(items)) => {
+                        'items: for item in &items {
+                            match item {
+                                BlockItem::Ann(name, te) => {
+                                    match lang::types::apply_ann(&type_env, name, te) {
+                                        Ok(scheme) => {
+                                            let display = lang::types::normalize_ty(scheme.ty.clone());
+                                            println!(
+                                                "{} {} {}",
+                                                name.bright_cyan(),
+                                                ":".dimmed(),
+                                                display.pretty(),
+                                            );
+                                            type_env.insert(name.clone(), scheme);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("{} {e}", "type error:".red().bold());
+                                            break 'items;
+                                        }
+                                    }
                                 }
-                                Err(e) => eprintln!("{} {e}", "error:".red().bold()),
+                                BlockItem::Bind(name, expr) => {
+                                    let type_result = infer_scheme(&type_env, expr)
+                                        .and_then(|s| lang::types::enforce_binding(&type_env, name, s));
+                                    match type_result {
+                                        Err(e) => {
+                                            eprintln!("{} {e}", "type error:".red().bold());
+                                            break 'items;
+                                        }
+                                        Ok(scheme) => match eval(expr, &env) {
+                                            Ok(val) => {
+                                                // Suppress display of internal tmp vars (#N).
+                                                if !name.starts_with('#') {
+                                                    let display_ty = lang::types::normalize_ty(scheme.ty.clone());
+                                                    println!(
+                                                        "{} {} {} {} {}",
+                                                        name.bright_cyan(),
+                                                        "=".dimmed(),
+                                                        val.pretty(),
+                                                        ":".dimmed(),
+                                                        display_ty.pretty(),
+                                                    );
+                                                }
+                                                type_env.insert(name.clone(), scheme);
+                                                env.set(name, val);
+                                            }
+                                            Err(e) => {
+                                                eprintln!("{} {e}", "error:".red().bold());
+                                                break 'items;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -150,20 +170,9 @@ fn repl() {
 }
 
 fn interpret(path: PathBuf) {
-    let src = read_file(&path);
-    let ast = match file_parser().parse(src.as_str()) {
-        Ok(ast) => ast,
-        Err(errs) => {
-            for e in errs { eprintln!("{}:parse error: {e}", path.display()); }
-            std::process::exit(1);
-        }
-    };
-    match infer(&std_type_env(), &ast) {
-        Err(e) => { eprintln!("type error: {e}"); std::process::exit(1); }
-        Ok(ty) => match eval(&ast, &std_env()) {
-            Ok(val) => println!("{} : {}", val, ty),
-            Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
-        }
+    match lang::module::load_module(&path.to_string_lossy()) {
+        Ok(entry) => println!("{} : {}", entry.val, entry.ty),
+        Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
     }
 }
 

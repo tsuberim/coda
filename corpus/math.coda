@@ -1,0 +1,4 @@
+double = \n -> n + n
+add    = \x y -> x + y
+
+{double: double, add: add}

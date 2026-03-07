@@ -1,0 +1,4 @@
+math = import `corpus/math.coda`
+
+math.double(math.add(3, 4))
+-- => 14

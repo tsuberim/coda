@@ -33,6 +33,8 @@ pub enum Expr {
     Tag(String, Option<Box<Expr>>),
     /// `when scrutinee is (Tag binding? -> body)+ (otherwise body)?`
     When(Box<Expr>, Vec<(String, Option<String>, Box<Expr>)>, Option<Box<Expr>>),
+    /// `import \`path\`` — statically known path, resolved at type-check and eval time.
+    Import(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]

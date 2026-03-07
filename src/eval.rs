@@ -140,6 +140,7 @@ pub enum EvalError {
     ArityMismatch { expected: usize, got: usize },
     NoSuchField(String),
     NoMatchingBranch(String),
+    ModuleError(String),
 }
 
 impl fmt::Display for EvalError {
@@ -154,6 +155,7 @@ impl fmt::Display for EvalError {
             }
             EvalError::NoSuchField(name) => write!(f, "no such field: {}", name),
             EvalError::NoMatchingBranch(tag) => write!(f, "no matching branch for tag: {}", tag),
+            EvalError::ModuleError(msg) => write!(f, "module error: {}", msg),
         }
     }
 }
@@ -236,6 +238,12 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
                     got: format!("{:?}", other),
                 }),
             }
+        }
+
+        Expr::Import(path) => {
+            crate::module::load_module(path)
+                .map(|e| e.val)
+                .map_err(EvalError::ModuleError)
         }
 
         Expr::Block(items, body) => {
