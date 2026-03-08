@@ -1,0 +1,3 @@
+-- Adding rank-2 arrays with incompatible inner dimensions is a type error.
+-- !> TYPE ERROR
+[[1, 2], [3, 4]] + [[1, 2, 3], [4, 5, 6]]

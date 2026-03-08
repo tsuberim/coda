@@ -1,0 +1,3 @@
+-- Multiply each element by a scalar.
+[1, 2, 3] * 2
+-- => [2, 4, 6]

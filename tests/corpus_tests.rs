@@ -112,14 +112,45 @@ fn run_corpus(path: &str) {
 // tensor tests
 #[test] fn test_tensors() { run_corpus("corpus/tensors.coda"); }
 
-// shaped array tests
+// shaped array — arithmetic
 #[test] fn test_array_add()                  { run_corpus("corpus/array_add.coda"); }
+#[test] fn test_array_subtract()             { run_corpus("corpus/array_subtract.coda"); }
+#[test] fn test_array_multiply()             { run_corpus("corpus/array_multiply.coda"); }
+#[test] fn test_array_negative()             { run_corpus("corpus/array_negative.coda"); }
+#[test] fn test_array_chain_ops()            { run_corpus("corpus/array_chain_ops.coda"); }
+
+// shaped array — broadcasting
 #[test] fn test_array_broadcast_scalar()     { run_corpus("corpus/array_broadcast_scalar.coda"); }
 #[test] fn test_array_broadcast_scalar_left(){ run_corpus("corpus/array_broadcast_scalar_left.coda"); }
+#[test] fn test_array_multiply_scalar()      { run_corpus("corpus/array_multiply_scalar.coda"); }
+#[test] fn test_array_subtract_scalar()      { run_corpus("corpus/array_subtract_scalar.coda"); }
+
+// shaped array — function lifting
 #[test] fn test_array_lift_fn()              { run_corpus("corpus/array_lift_fn.coda"); }
+#[test] fn test_array_lift_square()          { run_corpus("corpus/array_lift_square.coda"); }
+#[test] fn test_array_lift_two_arg()         { run_corpus("corpus/array_lift_two_arg.coda"); }
+#[test] fn test_array_lift_compose()         { run_corpus("corpus/array_lift_compose.coda"); }
 #[test] fn test_array_lift_multi()           { run_corpus("corpus/array_lift_multi.coda"); }
-#[test] fn test_array_rank2()                { run_corpus("corpus/array_rank2.coda"); }
+#[test] fn test_array_map()                  { run_corpus("corpus/array_map.coda"); }
+
+// shaped array — indexing / slicing / binding
 #[test] fn test_array_index()                { run_corpus("corpus/array_index.coda"); }
 #[test] fn test_array_slice()                { run_corpus("corpus/array_slice.coda"); }
+#[test] fn test_array_let_binding()          { run_corpus("corpus/array_let_binding.coda"); }
+#[test] fn test_array_ann()                  { run_corpus("corpus/array_ann.coda"); }
 #[test] fn test_array_dot()                  { run_corpus("corpus/array_dot.coda"); }
+#[test] fn test_array_dot_large()            { run_corpus("corpus/array_dot_large.coda"); }
+
+// shaped array — rank-2 and higher
+#[test] fn test_array_rank2()                { run_corpus("corpus/array_rank2.coda"); }
+#[test] fn test_array_rank2_index()          { run_corpus("corpus/array_rank2_index.coda"); }
+#[test] fn test_array_rank2_double_index()   { run_corpus("corpus/array_rank2_double_index.coda"); }
+#[test] fn test_array_rank2_add()            { run_corpus("corpus/array_rank2_add.coda"); }
+#[test] fn test_array_rank2_broadcast()      { run_corpus("corpus/array_rank2_broadcast.coda"); }
+#[test] fn test_array_rank2_lift()           { run_corpus("corpus/array_rank2_lift.coda"); }
+#[test] fn test_array_rank3()                { run_corpus("corpus/array_rank3.coda"); }
+
+// shaped array — type errors
 #[test] fn test_array_broadcast_fail()       { run_corpus("corpus/array_broadcast_fail.coda"); }
+#[test] fn test_array_rank_mismatch()        { run_corpus("corpus/array_rank_mismatch.coda"); }
+#[test] fn test_array_rank2_shape_error()    { run_corpus("corpus/array_rank2_shape_error.coda"); }

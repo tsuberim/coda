@@ -1,0 +1,5 @@
+-- Composed lifted functions: (x+1)*2.
+g = \x -> x + 1
+h = \x -> x * 2
+h(g([1, 2, 3]))
+-- => [4, 6, 8]

@@ -1,0 +1,3 @@
+-- Array bound in a let, used twice.
+(xs = [1, 2, 3]; xs + xs)
+-- => [2, 4, 6]

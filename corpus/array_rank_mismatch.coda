@@ -1,0 +1,3 @@
+-- Adding arrays of different ranks is a type error.
+-- !> TYPE ERROR
+[1, 2, 3] + [[1, 2], [3, 4]]

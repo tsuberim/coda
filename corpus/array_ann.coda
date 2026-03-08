@@ -1,0 +1,5 @@
+-- Type annotation constrains and is verified against the literal.
+xs : Int[3]
+xs = [1, 2, 3]
+xs + xs
+-- => [2, 4, 6]
