@@ -269,17 +269,41 @@ fn interpret(path: PathBuf) {
 fn compile(path: PathBuf, output: Option<PathBuf>) {
     let out = output.unwrap_or_else(|| PathBuf::from(path.file_stem().unwrap()));
     let src = read_file(&path);
-    match file_parser().parse(src.as_str()) {
-        Ok(_ast) => {
-            // TODO: codegen
-            eprintln!("(compiler not yet implemented, would write to {})", out.display());
-            std::process::exit(1);
-        }
+    let ast = match file_parser().parse(src.as_str()) {
+        Ok(ast) => ast,
         Err(errs) => {
             for e in errs { eprintln!("{}:parse error: {e}", path.display()); }
             std::process::exit(1);
         }
+    };
+    if let Err(e) = lang::types::infer(&lang::types::std_type_env(), &ast) {
+        eprintln!("type error: {e}");
+        std::process::exit(1);
     }
+    let ir = match lang::codegen::compile(&ast) {
+        Ok(ir) => ir,
+        Err(e) => { eprintln!("codegen error: {e}"); std::process::exit(1); }
+    };
+    // Write IR to temp file, then compile with clang.
+    let ir_path = out.with_extension("ll");
+    std::fs::write(&ir_path, &ir).unwrap_or_else(|e| {
+        eprintln!("failed to write IR: {e}"); std::process::exit(1);
+    });
+    let runtime_c = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/runtime.c");
+    let status = std::process::Command::new("clang")
+        .args([
+            ir_path.to_str().unwrap(),
+            runtime_c.to_str().unwrap(),
+            "-o", out.to_str().unwrap(),
+            "-O1",
+        ])
+        .status()
+        .unwrap_or_else(|e| { eprintln!("clang failed: {e}"); std::process::exit(1); });
+    if !status.success() {
+        eprintln!("clang exited with {}", status);
+        std::process::exit(1);
+    }
+    println!("compiled: {}", out.display());
 }
 
 fn read_file(path: &PathBuf) -> String {
