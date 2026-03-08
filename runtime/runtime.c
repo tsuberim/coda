@@ -3,25 +3,46 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef CODA_TRACK_ALLOCS
+static int64_t coda_live_vals = 0;
+#endif
+
 static CodaVal* alloc_val(CodaKind kind) {
     CodaVal *v = malloc(sizeof(CodaVal));
     if (!v) { fprintf(stderr, "oom\n"); exit(1); }
     v->kind = kind;
     v->rc = 1;
+#ifdef CODA_TRACK_ALLOCS
+    coda_live_vals++;
+#endif
     return v;
 }
 
+// Sentinel returned by coda_fix_tail_call when trampolining. rc is never
+// modified; coda_retain/coda_release skip it.
+static CodaVal trampoline_sentinel_storage = { .kind = CODA_INT, .rc = 1 };
+CodaVal *const coda_trampoline_sentinel = &trampoline_sentinel_storage;
+
+// Trampoline state (single-threaded; one bounce slot is enough because nested
+// fix calls are sequential — inner completes before outer's tail-call fires).
+static int   coda_trampoline_depth = 0;
+static CodaVal **coda_bounce_args  = NULL;
+static int32_t  coda_bounce_nargs  = 0;
+
 void coda_retain(CodaVal *v) {
-    if (v) v->rc++;
+    if (v && v != coda_trampoline_sentinel) v->rc++;
 }
 
 static void drop_children(CodaVal *v);
 
 void coda_release(CodaVal *v) {
-    if (!v) return;
+    if (!v || v == coda_trampoline_sentinel) return;
     if (--v->rc > 0) return;
     drop_children(v);
     free(v);
+#ifdef CODA_TRACK_ALLOCS
+    coda_live_vals--;
+#endif
 }
 
 static void drop_children(CodaVal *v) {
@@ -216,9 +237,53 @@ CodaVal* coda_eq(CodaVal *a, CodaVal *b) {
 
 static CodaVal* fix_shim(CodaVal **caps, CodaVal **args, int32_t nargs) {
     CodaVal *f = caps[0];
-    CodaVal *self = coda_fix(f);
-    CodaVal *stepped = coda_apply(f, &self, 1);
-    return coda_apply(stepped, args, nargs);
+    CodaVal **cur_args  = args;
+    int32_t  cur_nargs  = nargs;
+    int      owns_args  = 0;
+
+    while (1) {
+        CodaVal *self    = coda_fix(f);
+        CodaVal *stepped = coda_apply(f, &self, 1);
+        coda_release(self);
+
+        coda_trampoline_depth++;
+        CodaVal *result = coda_apply(stepped, cur_args, cur_nargs);
+        coda_trampoline_depth--;
+        coda_release(stepped);
+
+        if (owns_args) {
+            for (int i = 0; i < cur_nargs; i++) coda_release(cur_args[i]);
+            free(cur_args);
+        }
+
+        if (result == coda_trampoline_sentinel) {
+            cur_args   = coda_bounce_args;
+            cur_nargs  = coda_bounce_nargs;
+            owns_args  = 1;
+            coda_bounce_args = NULL;
+        } else {
+            return result;
+        }
+    }
+}
+
+// Called by generated code in tail position instead of coda_apply.
+// When inside a fix_shim trampoline and fn IS a fix_shim closure, store the
+// new args in the bounce slot and return the sentinel so fix_shim can loop
+// without growing the C stack.  Otherwise behaves identically to coda_apply.
+CodaVal* coda_fix_tail_call(CodaVal *fn, CodaVal **args, int32_t nargs) {
+    if (coda_trampoline_depth > 0 &&
+        fn && fn->kind == CODA_CLOSURE && fn->closure.fn == fix_shim) {
+        CodaVal **new_args = malloc(nargs * sizeof(CodaVal*));
+        for (int i = 0; i < nargs; i++) {
+            new_args[i] = args[i];
+            coda_retain(new_args[i]);
+        }
+        coda_bounce_args  = new_args;
+        coda_bounce_nargs = nargs;
+        return coda_trampoline_sentinel;
+    }
+    return coda_apply(fn, args, nargs);
 }
 
 CodaVal* coda_fix(CodaVal *f) {
@@ -303,11 +368,14 @@ CodaVal* coda_map(CodaVal *f, CodaVal *xs) {
 CodaVal* coda_fold(CodaVal *f, CodaVal *init, CodaVal *xs) {
     if (xs->kind != CODA_LIST) { fprintf(stderr, "runtime error: fold: not a list\n"); exit(1); }
     CodaVal *acc = init;
+    coda_retain(acc); // acc is always owned; init is borrowed
     for (int i = 0; i < xs->list.len; i++) {
         CodaVal *fargs[2] = { acc, xs->list.items[i] };
-        acc = coda_apply(f, fargs, 2);
+        CodaVal *next = coda_apply(f, fargs, 2);
+        coda_release(acc);
+        acc = next;
     }
-    return acc;
+    return acc; // caller takes ownership
 }
 
 CodaVal* coda_list_of(CodaVal *n_val, CodaVal *v) {
@@ -375,5 +443,12 @@ void coda_print_val(CodaVal *v) {
 int main(void) {
     CodaVal *result = coda_main();
     coda_print_val(result);
+    coda_release(result);
+#ifdef CODA_TRACK_ALLOCS
+    if (coda_live_vals != 0) {
+        fprintf(stderr, "LEAK: %lld CodaVal(s) still live at exit\n", (long long)coda_live_vals);
+        return 1;
+    }
+#endif
     return 0;
 }

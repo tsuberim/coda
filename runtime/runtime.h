@@ -47,6 +47,7 @@ CodaVal* coda_mul(CodaVal *a, CodaVal *b);
 CodaVal* coda_str_concat(CodaVal *a, CodaVal *b);
 CodaVal* coda_eq(CodaVal *a, CodaVal *b);
 CodaVal* coda_fix(CodaVal *f);
+CodaVal* coda_fix_tail_call(CodaVal *fn, CodaVal **args, int32_t nargs);
 
 CodaVal* coda_cons(CodaVal *x, CodaVal *xs);
 CodaVal* coda_append(CodaVal *xs, CodaVal *ys);

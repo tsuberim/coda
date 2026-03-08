@@ -200,6 +200,7 @@ fn compile_expr(
     fb: &mut FnBuilder,
     env: &Env,
     expr: &Expr,
+    tail: bool,
 ) -> Result<String, String> {
     match expr {
         Expr::Lit(Lit::Int(n)) => {
@@ -222,10 +223,10 @@ fn compile_expr(
         Expr::Lam(params, body) => compile_lam(c, fb, env, params, body),
 
         Expr::App(f, args) => {
-            let f_ssa = compile_expr(c, fb, env, f)?;
+            let f_ssa = compile_expr(c, fb, env, f, false)?;
             let arg_ssas: Vec<String> =
-                args.iter().map(|a| compile_expr(c, fb, env, a)).collect::<Result<_, _>>()?;
-            emit_apply(c, fb, &f_ssa, &arg_ssas)
+                args.iter().map(|a| compile_expr(c, fb, env, a, false)).collect::<Result<_, _>>()?;
+            emit_apply(c, fb, &f_ssa, &arg_ssas, tail)
         }
 
         Expr::Block(items, body) => {
@@ -233,14 +234,14 @@ fn compile_expr(
             for item in items {
                 match item {
                     BlockItem::Bind(name, e) => {
-                        let ssa = compile_expr(c, fb, &env2, e)?;
+                        let ssa = compile_expr(c, fb, &env2, e, false)?;
                         env2.insert(name.clone(), ssa);
                     }
                     BlockItem::Ann(_, _) => {}
                     BlockItem::MonadicBind(_, _) => unreachable!(),
                 }
             }
-            compile_expr(c, fb, &env2, body)
+            compile_expr(c, fb, &env2, body, tail)
         }
 
         Expr::Record(fields) => {
@@ -248,13 +249,13 @@ fn compile_expr(
             let mut val_ssas = Vec::new();
             for (k, e) in fields {
                 key_gs.push(c.string_const(k));
-                val_ssas.push(compile_expr(c, fb, env, e)?);
+                val_ssas.push(compile_expr(c, fb, env, e, false)?);
             }
             emit_record(c, fb, &key_gs, &val_ssas)
         }
 
         Expr::Field(rec_expr, field) => {
-            let rec_ssa = compile_expr(c, fb, env, rec_expr)?;
+            let rec_ssa = compile_expr(c, fb, env, rec_expr, false)?;
             let field_g = c.string_const(field);
             let r = c.ssa("field");
             fb.emit(format!("{} = call ptr @coda_field_get(ptr {}, ptr {})", r, rec_ssa, field_g));
@@ -265,7 +266,7 @@ fn compile_expr(
         Expr::Tag(name, payload) => {
             let name_g = c.string_const(name);
             let payload_ssa = match payload {
-                Some(e) => compile_expr(c, fb, env, e)?,
+                Some(e) => compile_expr(c, fb, env, e, false)?,
                 None => {
                     let r = c.ssa("unit");
                     fb.emit(format!("{} = call ptr @coda_mk_unit()", r));
@@ -282,12 +283,12 @@ fn compile_expr(
         }
 
         Expr::When(scrutinee, branches, otherwise) => {
-            compile_when(c, fb, env, scrutinee, branches, otherwise)
+            compile_when(c, fb, env, scrutinee, branches, otherwise, tail)
         }
 
         Expr::List(elems) => {
             let ssas: Vec<String> =
-                elems.iter().map(|e| compile_expr(c, fb, env, e)).collect::<Result<_, _>>()?;
+                elems.iter().map(|e| compile_expr(c, fb, env, e, false)).collect::<Result<_, _>>()?;
             emit_list(c, fb, &ssas)
         }
 
@@ -334,7 +335,7 @@ fn compile_lam(
         lam_env.insert(param.clone(), ssa);
     }
 
-    let result = compile_expr(c, &mut lam_fb, &lam_env, body)?;
+    let result = compile_expr(c, &mut lam_fb, &lam_env, body, true)?;
     lam_fb.prepare_export(&result);
     lam_fb.emit_ret(&result);
 
@@ -383,13 +384,20 @@ fn compile_when(
     scrutinee: &Expr,
     branches: &[(String, Option<String>, Box<Expr>)],
     otherwise: &Option<Box<Expr>>,
+    tail: bool,
 ) -> Result<String, String> {
-    let scrut = compile_expr(c, fb, env, scrutinee)?;
+    let scrut = compile_expr(c, fb, env, scrutinee, false)?;
     let scrut_was_owned = fb.is_owned(&scrut);
     // Remove scrutinee from owned set — we'll release it manually at the merge block
     if scrut_was_owned {
         fb.owned.remove(&scrut);
     }
+
+    // Snapshot owned set after compiling the scrutinee (including any intermediates
+    // it created, but excluding the scrut itself).  next_block() clears owned on
+    // every branch transition, so we restore this set at merge so prepare_export
+    // can release all pre-branch values.
+    let pre_branch_owned = fb.owned.clone();
 
     let tn = c.ssa("tn");
     fb.emit(format!("{} = call ptr @coda_tag_name(ptr {})", tn, scrut));
@@ -441,7 +449,7 @@ fn compile_when(
             fb.emit(format!("{} = call ptr @coda_tag_payload(ptr {})", p, scrut));
             env2.insert(b.clone(), p);
         }
-        let result = compile_expr(c, fb, &mut env2, body)?;
+        let result = compile_expr(c, fb, &mut env2, body, tail)?;
         let from = fb.cur_label().to_string();
         fb.prepare_export(&result);
         phi_entries.push((result, from));
@@ -468,7 +476,7 @@ fn compile_when(
     if let Some(body) = otherwise {
         let ol = otherwise_label.clone().unwrap();
         fb.next_block(ol);
-        let result = compile_expr(c, fb, env, body)?;
+        let result = compile_expr(c, fb, env, body, tail)?;
         let from = fb.cur_label().to_string();
         fb.prepare_export(&result);
         phi_entries.push((result, from));
@@ -502,6 +510,10 @@ fn compile_when(
         fb.emit(format!("call void @coda_release(ptr {})", scrut));
     }
 
+    // Restore pre-branch owned values — next_block() inside the branches cleared them.
+    // They need to be visible to prepare_export at the function exit.
+    fb.owned.extend(pre_branch_owned);
+
     Ok(r)
 }
 
@@ -510,11 +522,13 @@ fn emit_apply(
     fb: &mut FnBuilder,
     f_ssa: &str,
     arg_ssas: &[String],
+    tail: bool,
 ) -> Result<String, String> {
+    let apply_fn = if tail { "@coda_fix_tail_call" } else { "@coda_apply" };
     let r = c.ssa("app");
     let n = arg_ssas.len();
     if n == 0 {
-        fb.emit(format!("{} = call ptr @coda_apply(ptr {}, ptr null, i32 0)", r, f_ssa));
+        fb.emit(format!("{} = call ptr {}(ptr {}, ptr null, i32 0)", r, apply_fn, f_ssa));
     } else {
         let arr = c.ssa("argarr");
         fb.emit(format!("{} = alloca [{} x ptr]", arr, n));
@@ -526,7 +540,7 @@ fn emit_apply(
             ));
             fb.emit(format!("store ptr {}, ptr {}", arg, gep));
         }
-        fb.emit(format!("{} = call ptr @coda_apply(ptr {}, ptr {}, i32 {})", r, f_ssa, arr, n));
+        fb.emit(format!("{} = call ptr {}(ptr {}, ptr {}, i32 {})", r, apply_fn, f_ssa, arr, n));
     }
     fb.own(&r);
     Ok(r)
@@ -640,6 +654,7 @@ declare ptr @coda_list_of(ptr, ptr)
 declare ptr @coda_list_init(ptr, ptr)
 declare void @coda_retain(ptr)
 declare void @coda_release(ptr)
+declare ptr @coda_fix_tail_call(ptr, ptr, i32)
 "#;
 
 const BUILTIN_WRAPPERS: &str = r#"; Builtin wrapper functions (closure-callable wrappers around C runtime fns)
@@ -863,7 +878,7 @@ pub fn compile(expr: &Expr) -> Result<String, String> {
     }
 
     // Compile the program body.
-    let result = compile_expr(&mut c, &mut fb, &env, expr)?;
+    let result = compile_expr(&mut c, &mut fb, &env, expr, false)?;
     fb.prepare_export(&result);
     fb.emit_ret(&result);
 

@@ -1,0 +1,9 @@
+-- Count down from n to 0, return 0. Tail-recursive via fix.
+-- Without TCO this stack-overflows at ~10000.
+count_down = fix(\rec -> \n ->
+  when (n == 0) is
+    True  -> 0
+    False -> rec(n - 1)
+)
+count_down(100000)
+-- => 0

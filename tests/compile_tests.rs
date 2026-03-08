@@ -6,6 +6,14 @@ use std::process::Command;
 /// Files with `-- !> TYPE ERROR` are skipped (type errors, no binary produced).
 /// Files with no `-- => VALUE` annotation are compiled and run (no output check).
 fn run_compiled(path: &str) {
+    run_compiled_impl(path, false);
+}
+
+fn check_leaks(path: &str) {
+    run_compiled_impl(path, true);
+}
+
+fn run_compiled_impl(path: &str, track_allocs: bool) {
     let src = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read {}: {}", path, e));
 
@@ -34,8 +42,12 @@ fn run_compiled(path: &str) {
         .unwrap_or_else(|e| panic!("failed to write IR for {}: {}", path, e));
 
     let runtime_c = concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/runtime.c");
+    let mut clang_args = vec![ir_path.as_str(), runtime_c, "-o", &bin_path, "-O1"];
+    if track_allocs {
+        clang_args.push("-DCODA_TRACK_ALLOCS");
+    }
     let status = Command::new("clang")
-        .args([&ir_path, runtime_c, "-o", &bin_path, "-O1"])
+        .args(&clang_args)
         .output()
         .unwrap_or_else(|e| panic!("clang not found for {}: {}", path, e));
 
@@ -51,7 +63,14 @@ fn run_compiled(path: &str) {
         .output()
         .unwrap_or_else(|e| panic!("failed to run binary for {}: {}", path, e));
 
-    assert!(run.status.success(), "binary crashed for {}", path);
+    assert!(
+        run.status.success(),
+        "binary {} for {}:\nstdout: {}\nstderr: {}",
+        if track_allocs { "leaked" } else { "crashed" },
+        path,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
 
     let got = String::from_utf8_lossy(&run.stdout);
     let got = got.trim_end_matches('\n');
@@ -86,3 +105,27 @@ fn run_compiled(path: &str) {
 #[test] fn compiled_list_append()  { run_compiled("corpus/list_append.coda"); }
 #[test] fn compiled_list_init()    { run_compiled("corpus/list_init.coda"); }
 #[test] fn compiled_list_of()      { run_compiled("corpus/list_of.coda"); }
+#[test] fn compiled_tco()          { run_compiled("corpus/tco.coda"); }
+
+// Leak checks: compile with -DCODA_TRACK_ALLOCS; binary exits 1 if any CodaVal is live at exit.
+#[test] fn leak_arithmetic()  { check_leaks("corpus/arithmetic.coda"); }
+#[test] fn leak_strings()     { check_leaks("corpus/strings.coda"); }
+#[test] fn leak_records()     { check_leaks("corpus/records.coda"); }
+#[test] fn leak_tags()        { check_leaks("corpus/tags.coda"); }
+#[test] fn leak_option()      { check_leaks("corpus/option.coda"); }
+#[test] fn leak_closures()    { check_leaks("corpus/closures.coda"); }
+#[test] fn leak_fix()         { check_leaks("corpus/fix.coda"); }
+#[test] fn leak_multiply()    { check_leaks("corpus/multiply.coda"); }
+#[test] fn leak_subtract()    { check_leaks("corpus/subtract.coda"); }
+#[test] fn leak_equality()    { check_leaks("corpus/equality.coda"); }
+#[test] fn leak_destructure() { check_leaks("corpus/destructure.coda"); }
+#[test] fn leak_list_literal() { check_leaks("corpus/list_literal.coda"); }
+#[test] fn leak_list_empty()   { check_leaks("corpus/list_empty.coda"); }
+#[test] fn leak_list_cons()    { check_leaks("corpus/list_cons.coda"); }
+#[test] fn leak_list_head()    { check_leaks("corpus/list_head.coda"); }
+#[test] fn leak_list_map()     { check_leaks("corpus/list_map.coda"); }
+#[test] fn leak_list_fold()    { check_leaks("corpus/list_fold.coda"); }
+#[test] fn leak_list_append()  { check_leaks("corpus/list_append.coda"); }
+#[test] fn leak_list_init()    { check_leaks("corpus/list_init.coda"); }
+#[test] fn leak_list_of()      { check_leaks("corpus/list_of.coda"); }
+#[test] fn leak_tco()          { check_leaks("corpus/tco.coda"); }
