@@ -7,6 +7,11 @@ edition = "2024"
 name = "coda"
 path = "src/main.rs"
 
+[[bench]]
+name    = "corpus"
+path    = "benches/corpus.rs"
+harness = false
+
 [dependencies]
 ariadne = "0.6.0"
 chumsky = "0.9"
@@ -14,3 +19,8 @@ clap = { version = "4.5.60", features = ["derive"] }
 colored = "3.1.1"
 dirs = "6.0.0"
 rustyline = "17.0.2"
+
+[dev-dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,0 +1,6 @@
+-- Map (*2) then fold-sum over a 10k-element list.
+-- Stresses list allocation, map traversal, and GC throughput.
+-- Sum of 2*i for i in [0..9999] = 2 * (9999*10000/2) = 99990000
+xs = list_init(10000, \i -> i)
+fold(\acc x -> acc + x, 0, map(\x -> x * 2, xs))
+-- => 99990000

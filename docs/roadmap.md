@@ -2,17 +2,17 @@
 
 Roughly in order. Each item builds on the previous.
 
-## 1. Reference-counting GC
+## ✓ 1. Reference-counting GC
 
-Currently the compiler leaks. Add `rc: int32_t` to `CodaVal`, with `retain`/`release` in the runtime. Insert retain/release calls during codegen via liveness analysis: retain on capture/store, release at last use. No cycle collector needed — immutable values can't form cycles, and `fix` creates fresh closures on each call rather than a static heap cycle.
+`rc: int32_t` in `CodaVal`, `retain`/`release` in the runtime. Retain on capture/store, release at last use via owned-set liveness in codegen. No cycle collector needed — immutable values can't form cycles.
 
-## 2. Tail call optimization
+## ✓ 2. Tail call optimization
 
-Recursive `fix` uses the C stack and will overflow on deep recursion. Detect self-tail-calls in codegen and emit LLVM `musttail` or convert to a loop. Enough to make `factorial`, `fib`, and list traversals stack-safe.
+`fix`-based recursion uses a trampoline: `fix_shim` loops instead of recursing; `coda_fix_tail_call` bounces when inside a trampoline frame. `tail: bool` threaded through codegen marks genuine tail positions.
 
-## 3. Compiled Tasks / IO
+## ✓ 3. Compiled Tasks / IO
 
-Tasks are currently interpreter-only. In compiled code, represent `Task ok err` as a closure `() -> CodaVal*` that either returns a value or calls a runtime error handler. Wire up `ok`, `>>=`, `fail`, `catch`, `print`, `read_line` as compiled builtins. This unlocks compiling IO programs end-to-end.
+`Task ok err` represented as a zero-arg closure returning `[Ok val | Err e]`. `ok`, `>>=`, `fail`, `catch`, `print`, `read_line` wired as compiled builtins. `coda_run_task` called from `coda_main` when the top-level type is `Task`.
 
 ## 4. Compiled imports / modules
 

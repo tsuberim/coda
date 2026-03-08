@@ -1,5 +1,5 @@
 use chumsky::Parser as _;
-use lang::{codegen, parser::file_parser, types::{infer, std_type_env}};
+use lang::{codegen, parser::file_parser, types::{infer, std_type_env, Type}};
 use std::process::Command;
 
 /// Compile a `.coda` file to a native binary via LLVM IR, run it, and check output.
@@ -28,10 +28,11 @@ fn run_compiled_impl(path: &str, track_allocs: bool) {
         .parse(src.as_str())
         .unwrap_or_else(|e| panic!("parse error in {}: {:?}", path, e));
 
-    infer(&std_type_env(), &ast)
+    let ty = infer(&std_type_env(), &ast)
         .unwrap_or_else(|e| panic!("type error in {}: {}", path, e));
+    let is_task = matches!(&ty, Type::Con(name, _) if name == "Task");
 
-    let ir = codegen::compile(&ast)
+    let ir = codegen::compile(&ast, is_task)
         .unwrap_or_else(|e| panic!("codegen error in {}: {}", path, e));
 
     // Write IR to a temp file.
@@ -107,6 +108,12 @@ fn run_compiled_impl(path: &str, track_allocs: bool) {
 #[test] fn compiled_list_of()      { run_compiled("corpus/list_of.coda"); }
 #[test] fn compiled_tco()          { run_compiled("corpus/tco.coda"); }
 
+// Stress / benchmark corpus
+#[test] fn compiled_bench_fib()      { run_compiled("corpus/bench_fib.coda"); }
+#[test] fn compiled_bench_triangle() { run_compiled("corpus/bench_triangle.coda"); }
+#[test] fn compiled_bench_list_sum() { run_compiled("corpus/bench_list_sum.coda"); }
+#[test] fn compiled_bench_map_sum()  { run_compiled("corpus/bench_map_sum.coda"); }
+
 // Leak checks: compile with -DCODA_TRACK_ALLOCS; binary exits 1 if any CodaVal is live at exit.
 #[test] fn leak_arithmetic()  { check_leaks("corpus/arithmetic.coda"); }
 #[test] fn leak_strings()     { check_leaks("corpus/strings.coda"); }
@@ -129,3 +136,15 @@ fn run_compiled_impl(path: &str, track_allocs: bool) {
 #[test] fn leak_list_init()    { check_leaks("corpus/list_init.coda"); }
 #[test] fn leak_list_of()      { check_leaks("corpus/list_of.coda"); }
 #[test] fn leak_tco()          { check_leaks("corpus/tco.coda"); }
+#[test] fn leak_bench_fib()      { check_leaks("corpus/bench_fib.coda"); }
+#[test] fn leak_bench_triangle() { check_leaks("corpus/bench_triangle.coda"); }
+#[test] fn leak_bench_list_sum() { check_leaks("corpus/bench_list_sum.coda"); }
+#[test] fn leak_bench_map_sum()  { check_leaks("corpus/bench_map_sum.coda"); }
+
+#[test] fn compiled_task_ok()           { run_compiled("corpus/task_ok.coda"); }
+#[test] fn compiled_task_then()         { run_compiled("corpus/task_then.coda"); }
+#[test] fn compiled_task_bind()         { run_compiled("corpus/task_bind.coda"); }
+#[test] fn compiled_task_catch()        { run_compiled("corpus/task_catch.coda"); }
+#[test] fn compiled_task_catch_inspect(){ run_compiled("corpus/task_catch_inspect.coda"); }
+#[test] fn compiled_task_discard()      { run_compiled("corpus/task_discard.coda"); }
+#[test] fn compiled_task_mixed_bind()   { run_compiled("corpus/task_mixed_bind.coda"); }

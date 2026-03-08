@@ -440,6 +440,110 @@ void coda_print_val(CodaVal *v) {
     printf("\n");
 }
 
+// ok(v): task that returns Ok(v)
+static CodaVal* task_ok_body(CodaVal **caps, CodaVal **args, int32_t nargs) {
+    return coda_mk_tag("Ok", caps[0]);
+}
+CodaVal* coda_task_ok(CodaVal *v) {
+    return coda_mk_closure(task_ok_body, &v, 1);
+}
+
+// fail(e): task that returns Err(e)
+static CodaVal* task_fail_body(CodaVal **caps, CodaVal **args, int32_t nargs) {
+    return coda_mk_tag("Err", caps[0]);
+}
+CodaVal* coda_task_fail(CodaVal *e) {
+    return coda_mk_closure(task_fail_body, &e, 1);
+}
+
+// bind(task, f): task that runs task, on Ok applies f to get next task, runs that; on Err propagates
+static CodaVal* task_bind_body(CodaVal **caps, CodaVal **args, int32_t nargs) {
+    CodaVal *task = caps[0];
+    CodaVal *f    = caps[1];
+    CodaVal *res  = coda_apply(task, NULL, 0);
+    if (coda_str_eq(coda_tag_name(res), "Ok")) {
+        CodaVal *v         = coda_tag_payload(res);
+        CodaVal *next_task = coda_apply(f, &v, 1);
+        coda_release(res);
+        CodaVal *final = coda_apply(next_task, NULL, 0);
+        coda_release(next_task);
+        return final;
+    }
+    return res; // Err — propagate
+}
+CodaVal* coda_task_bind(CodaVal *task, CodaVal *f) {
+    CodaVal *caps[2] = {task, f};
+    return coda_mk_closure(task_bind_body, caps, 2);
+}
+
+// catch(task, handler): task that runs task; on Err applies handler to get recovery task, runs that
+static CodaVal* task_catch_body(CodaVal **caps, CodaVal **args, int32_t nargs) {
+    CodaVal *task    = caps[0];
+    CodaVal *handler = caps[1];
+    CodaVal *res = coda_apply(task, NULL, 0);
+    if (coda_str_eq(coda_tag_name(res), "Ok")) {
+        return res;
+    }
+    CodaVal *e        = coda_tag_payload(res);
+    CodaVal *recovery = coda_apply(handler, &e, 1);
+    coda_release(res);
+    CodaVal *final = coda_apply(recovery, NULL, 0);
+    coda_release(recovery);
+    return final;
+}
+CodaVal* coda_task_catch(CodaVal *task, CodaVal *handler) {
+    CodaVal *caps[2] = {task, handler};
+    return coda_mk_closure(task_catch_body, caps, 2);
+}
+
+// print(s): task that prints s to stdout and returns Ok({})
+static CodaVal* task_print_body(CodaVal **caps, CodaVal **args, int32_t nargs) {
+    printf("%s\n", caps[0]->str_val);
+    CodaVal *unit = coda_mk_unit();
+    CodaVal *res  = coda_mk_tag("Ok", unit);
+    coda_release(unit);
+    return res;
+}
+CodaVal* coda_task_print(CodaVal *s) {
+    return coda_mk_closure(task_print_body, &s, 1);
+}
+
+// read_line: task that reads a line from stdin
+static CodaVal* task_read_line_body(CodaVal **caps, CodaVal **args, int32_t nargs) {
+    char buf[4096];
+    if (fgets(buf, sizeof(buf), stdin) == NULL) {
+        CodaVal *msg    = coda_mk_str("read error");
+        CodaVal *io_err = coda_mk_tag("IoErr", msg);
+        coda_release(msg);
+        CodaVal *res = coda_mk_tag("Err", io_err);
+        coda_release(io_err);
+        return res;
+    }
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
+    CodaVal *s   = coda_mk_str(buf);
+    CodaVal *res = coda_mk_tag("Ok", s);
+    coda_release(s);
+    return res;
+}
+CodaVal* coda_task_read_line(void) {
+    return coda_mk_closure(task_read_line_body, NULL, 0);
+}
+
+// Run task to completion: on Ok returns the ok value (caller owns it); on Err exits 1
+CodaVal* coda_run_task(CodaVal *task) {
+    CodaVal *res = coda_apply(task, NULL, 0);
+    if (coda_str_eq(coda_tag_name(res), "Ok")) {
+        CodaVal *val = coda_tag_payload(res);
+        coda_retain(val);
+        coda_release(res);
+        return val;
+    }
+    fprintf(stderr, "task failed\n");
+    coda_release(res);
+    exit(1);
+}
+
 int main(void) {
     CodaVal *result = coda_main();
     coda_print_val(result);

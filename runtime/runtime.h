@@ -64,3 +64,11 @@ void coda_release(CodaVal *v);
 
 void coda_print_val(CodaVal *v);
 CodaVal* coda_main(void);
+
+CodaVal* coda_task_ok(CodaVal *v);
+CodaVal* coda_task_fail(CodaVal *e);
+CodaVal* coda_task_bind(CodaVal *task, CodaVal *f);
+CodaVal* coda_task_catch(CodaVal *task, CodaVal *handler);
+CodaVal* coda_task_print(CodaVal *s);
+CodaVal* coda_task_read_line(void);
+CodaVal* coda_run_task(CodaVal *task);

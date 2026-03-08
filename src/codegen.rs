@@ -655,6 +655,13 @@ declare ptr @coda_list_init(ptr, ptr)
 declare void @coda_retain(ptr)
 declare void @coda_release(ptr)
 declare ptr @coda_fix_tail_call(ptr, ptr, i32)
+declare ptr @coda_task_ok(ptr)
+declare ptr @coda_task_fail(ptr)
+declare ptr @coda_task_bind(ptr, ptr)
+declare ptr @coda_task_catch(ptr, ptr)
+declare ptr @coda_task_print(ptr)
+declare ptr @coda_task_read_line()
+declare ptr @coda_run_task(ptr)
 "#;
 
 const BUILTIN_WRAPPERS: &str = r#"; Builtin wrapper functions (closure-callable wrappers around C runtime fns)
@@ -802,6 +809,50 @@ entry:
   %r = call ptr @coda_list_init(ptr %n, ptr %f)
   ret ptr %r
 }
+
+define ptr @builtin_ok(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %v = load ptr, ptr %p0
+  %r = call ptr @coda_task_ok(ptr %v)
+  ret ptr %r
+}
+
+define ptr @builtin_fail(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %e = load ptr, ptr %p0
+  %r = call ptr @coda_task_fail(ptr %e)
+  ret ptr %r
+}
+
+define ptr @builtin_task_bind(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %task = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %f = load ptr, ptr %p1
+  %r = call ptr @coda_task_bind(ptr %task, ptr %f)
+  ret ptr %r
+}
+
+define ptr @builtin_catch(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %task = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %handler = load ptr, ptr %p1
+  %r = call ptr @coda_task_catch(ptr %task, ptr %handler)
+  ret ptr %r
+}
+
+define ptr @builtin_print(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %s = load ptr, ptr %p0
+  %r = call ptr @coda_task_print(ptr %s)
+  ret ptr %r
+}
 "#;
 
 // ── String constant emission ──────────────────────────────────────────────────
@@ -844,6 +895,12 @@ fn builtin_fn(name: &str) -> Option<&'static str> {
         "fold"   => Some("builtin_fold"),
         "list_of"   => Some("builtin_list_of"),
         "list_init" => Some("builtin_list_init"),
+        "ok"    => Some("builtin_ok"),
+        "fail"  => Some("builtin_fail"),
+        ">>="   => Some("builtin_task_bind"),
+        "then"  => Some("builtin_task_bind"),
+        "catch" => Some("builtin_catch"),
+        "print" => Some("builtin_print"),
         _ => None,
     }
 }
@@ -852,7 +909,7 @@ fn builtin_fn(name: &str) -> Option<&'static str> {
 
 /// Compile a Coda AST expression to LLVM IR text.
 /// Returns the complete `.ll` file content.
-pub fn compile(expr: &Expr) -> Result<String, String> {
+pub fn compile(expr: &Expr, is_task: bool) -> Result<String, String> {
     let mut c = Compiler::new();
     let mut fb = FnBuilder::new();
     let mut env: Env = HashMap::new();
@@ -864,6 +921,7 @@ pub fn compile(expr: &Expr) -> Result<String, String> {
         "head", "tail", "len", "map", "fold",
         "list_of", "list_init",
         "then", // alias for >>=
+        ">>=", "ok", "fail", "catch", "print",
     ];
     for name in &builtins {
         if let Some(fn_name) = builtin_fn(name) {
@@ -877,10 +935,24 @@ pub fn compile(expr: &Expr) -> Result<String, String> {
         }
     }
 
+    // read_line is a task value, not a function wrapper
+    let rl = c.ssa("b");
+    fb.emit(format!("{} = call ptr @coda_task_read_line()", rl));
+    fb.own(&rl);
+    env.insert("read_line".to_string(), rl);
+
     // Compile the program body.
     let result = compile_expr(&mut c, &mut fb, &env, expr, false)?;
-    fb.prepare_export(&result);
-    fb.emit_ret(&result);
+    if is_task {
+        fb.prepare_export(&result);
+        let ok_val = c.ssa("ok_val");
+        fb.emit(format!("{} = call ptr @coda_run_task(ptr {})", ok_val, result));
+        fb.emit(format!("call void @coda_release(ptr {})", result));
+        fb.emit_ret(&ok_val);
+    } else {
+        fb.prepare_export(&result);
+        fb.emit_ret(&result);
+    }
 
     let main_body = fb.to_ir();
 

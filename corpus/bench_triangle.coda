@@ -1,0 +1,9 @@
+-- Sum 1..100000 via tail recursion. Result: 5000050000 (fits in int64).
+-- Stresses TCO + integer arithmetic.
+sum_to = fix(\rec -> \n acc ->
+  when (n == 0) is
+    True  -> acc
+    False -> rec(n - 1, acc + n)
+)
+sum_to(100000, 0)
+-- => 5000050000

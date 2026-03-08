@@ -276,11 +276,12 @@ fn compile(path: PathBuf, output: Option<PathBuf>) {
             std::process::exit(1);
         }
     };
-    if let Err(e) = lang::types::infer(&lang::types::std_type_env(), &ast) {
-        eprintln!("type error: {e}");
-        std::process::exit(1);
-    }
-    let ir = match lang::codegen::compile(&ast) {
+    let ty = match lang::types::infer(&lang::types::std_type_env(), &ast) {
+        Ok(ty) => ty,
+        Err(e) => { eprintln!("type error: {e}"); std::process::exit(1); }
+    };
+    let is_task = matches!(&ty, lang::types::Type::Con(name, _) if name == "Task");
+    let ir = match lang::codegen::compile(&ast, is_task) {
         Ok(ir) => ir,
         Err(e) => { eprintln!("codegen error: {e}"); std::process::exit(1); }
     };

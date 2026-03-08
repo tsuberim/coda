@@ -1,0 +1,39 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install clang
+        run: sudo apt-get install -y clang
+
+      - name: Run benchmarks
+        run: |
+          cargo bench --bench corpus -- \
+            --json /tmp/bench-results.json \
+            --compare bench-baseline.json
+
+      - name: Update baseline (main only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          cp /tmp/bench-results.json bench-baseline.json
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bench-baseline.json
+          git diff --staged --quiet || git commit -m "ci: update bench baseline [skip ci]"
+          git push
