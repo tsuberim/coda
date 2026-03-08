@@ -290,7 +290,7 @@ impl fmt::Display for InferError {
 
 impl InferError {
     pub fn render(&self, filename: &str, src: &str) -> String {
-        use ariadne::{Color, Label, Report, ReportKind, sources};
+        use ariadne::{CharSet, Color, Config, Label, Report, ReportKind, sources};
         let mut out = Vec::<u8>::new();
         let span = (filename.to_string(), self.span.clone());
         Report::build(ReportKind::Error, span.clone())
@@ -300,6 +300,7 @@ impl InferError {
                     .with_message(self.kind.to_string())
                     .with_color(Color::Red),
             )
+            .with_config(Config::new().with_char_set(CharSet::Ascii))
             .finish()
             .write(sources([(filename.to_string(), src.to_string())]), &mut out)
             .unwrap_or(());
