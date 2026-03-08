@@ -30,7 +30,7 @@ fn run_compiled_impl(path: &str, track_allocs: bool) {
 
     let ty = infer(&std_type_env(), &ast)
         .unwrap_or_else(|e| panic!("type error in {}: {}", path, e));
-    let is_task = matches!(&ty, Type::Con(name, _) if name == "Task");
+    let is_task = matches!(&ty, Type::Shaped(lang::types::BaseType::Task(..), sh) if sh.is_empty());
 
     let ir = codegen::compile(&ast, is_task)
         .unwrap_or_else(|e| panic!("codegen error in {}: {}", path, e));

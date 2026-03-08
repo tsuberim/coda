@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chumsky::prelude::*;
 
-use crate::ast::*;
+use crate::ast::{*, DimExpr};
 
 const SYM_CHARS: &str = "!@$%^&*-+=|<>?/~.:";
 
@@ -71,12 +71,11 @@ fn item_parser(
             let mut items = vec![BlockItem::Bind(tmp.clone(), rhs)];
             for (field, bind_name) in fields {
                 // synthetic span for the desugared Field access — use the whole destructure span
-                let field_expr: Spanned<Expr> = (
-                    Expr::Field(
-                        Box::new((Expr::Var(tmp.clone()), span.clone())),
-                        field,
-                    ),
+                let inner_var = Node::new(fresh_node_id(), span.clone(), Expr::Var(tmp.clone()));
+                let field_expr: Spanned<Expr> = Node::new(
+                    fresh_node_id(),
                     span.clone(),
+                    Expr::Field(Box::new(inner_var), field),
                 );
                 items.push(BlockItem::Bind(bind_name, field_expr));
             }
@@ -106,27 +105,27 @@ fn desugar_block(items: Vec<BlockItem>, body: Spanned<Expr>, span: Span) -> Span
         return if items.is_empty() {
             body
         } else {
-            (Expr::Block(items, Box::new(body)), span)
+            Node::new(fresh_node_id(), span, Expr::Block(items, Box::new(body)))
         };
     }
     items.into_iter().rev().fold(body, |acc, item| {
-        let acc_span = acc.1.clone();
+        let acc_span = acc.span.clone();
         match item {
             BlockItem::MonadicBind(name, e) => {
-                let e_span = e.1.clone();
+                let e_span = e.span.clone();
                 let lam_span = acc_span.clone();
-                let lam: Spanned<Expr> = (Expr::Lam(vec![name], Box::new(acc)), lam_span.clone());
-                let bind_var: Spanned<Expr> = (Expr::Var(">>=".into()), e_span.clone());
-                (Expr::App(Box::new(bind_var), vec![e, lam]), lam_span)
+                let lam: Spanned<Expr> = Node::new(fresh_node_id(), lam_span.clone(), Expr::Lam(vec![name], Box::new(acc)));
+                let bind_var: Spanned<Expr> = Node::new(fresh_node_id(), e_span.clone(), Expr::Var(">>=".into()));
+                Node::new(fresh_node_id(), lam_span, Expr::App(Box::new(bind_var), vec![e, lam]))
             }
             BlockItem::Bind(name, e) => {
-                let item_span = e.1.clone();
+                let item_span = e.span.clone();
                 let block_span = item_span.start..acc_span.end;
-                (Expr::Block(vec![BlockItem::Bind(name, e)], Box::new(acc)), block_span)
+                Node::new(fresh_node_id(), block_span, Expr::Block(vec![BlockItem::Bind(name, e)], Box::new(acc)))
             }
             BlockItem::Ann(name, te) => {
                 let block_span = span.clone();
-                (Expr::Block(vec![BlockItem::Ann(name, te)], Box::new(acc)), block_span)
+                Node::new(fresh_node_id(), block_span, Expr::Block(vec![BlockItem::Ann(name, te)], Box::new(acc)))
             }
         }
     })
@@ -312,15 +311,47 @@ pub fn type_expr_parser() -> impl Parser<char, crate::ast::TypeExpr, Error = Sim
 
         let type_parens = te.clone().padded().delimited_by(just('('), just(')'));
 
+        // Nat literal in type position: decimal integer (for tensor dimensions).
+        let type_nat = text::digits::<char, Simple<char>>(10)
+            .map(|s: String| TypeExpr::Nat(s.parse().unwrap()));
+
+        // DimExpr: a Nat literal or a lowercase var
+        let dim_nat = text::digits::<char, Simple<char>>(10)
+            .map(|s: String| DimExpr::Nat(s.parse().unwrap()));
+        let dim_var = filter(|c: &char| c.is_lowercase())
+            .then(filter(|c: &char| c.is_alphanumeric() || *c == '_').repeated())
+            .map(|(h, t): (char, Vec<char>)| {
+                std::iter::once(h).chain(t).collect::<String>()
+            })
+            .map(DimExpr::Var);
+        let dim_expr = dim_nat.or(dim_var);
+
         // Atom type: no function arrows.
-        let atom = choice((
+        let atom_base = choice((
             type_record,
             type_union,
             type_parens,
             type_app,  // before type_con — both start with uppercase
             type_con,
+            type_nat,
             type_var,
         ));
+
+        // Shaped type: atom_base [d1, d2, ...] — no whitespace before `[`
+        let atom = atom_base
+            .then(
+                dim_expr
+                    .padded()
+                    .separated_by(just(','))
+                    .allow_trailing()
+                    .at_least(1)
+                    .delimited_by(just('['), just(']'))
+                    .or_not()
+            )
+            .map(|(base, dims)| match dims {
+                None => base,
+                Some(ds) => TypeExpr::Shaped(Box::new(base), ds),
+            });
 
         // Function type: atom+ -> te, or just atom.
         // Use hws1() (horizontal-only) between chained atoms so we never consume
@@ -372,9 +403,19 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
 
         let digits = text::digits::<char, Simple<char>>(10);
 
+        // Float literal: digits `.` digits — must be tried before int.
+        let float_lit = digits
+            .clone()
+            .then_ignore(just('.'))
+            .then(digits.clone())
+            .map_with_span(|(int_part, frac_part): (String, String), span| {
+                let s = format!("{}.{}", int_part, frac_part);
+                Node::new(fresh_node_id(), span, Expr::Lit(Lit::Float(s.parse().unwrap())))
+            });
+
         let int_lit = digits
             .clone()
-            .map_with_span(|s: String, span| (Expr::Lit(Lit::Int(s.parse().unwrap())), span));
+            .map_with_span(|s: String, span| Node::new(fresh_node_id(), span, Expr::Lit(Lit::Int(s.parse().unwrap()))));
 
         // Template string: `...{expr}...`
         // Desugars to ++(part, ...) or a plain Lit::Str for no interpolations.
@@ -382,7 +423,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             .repeated()
             .at_least(1)
             .collect::<String>()
-            .map_with_span(|s, span| (Expr::Lit(Lit::Str(s)), span));
+            .map_with_span(|s, span| Node::new(fresh_node_id(), span, Expr::Lit(Lit::Str(s))));
 
         let tmpl_interp = expr
             .clone()
@@ -394,20 +435,20 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             .repeated()
             .delimited_by(just('`'), just('`'))
             .map_with_span(|parts, span: Span| match parts.len() {
-                0 => (Expr::Lit(Lit::Str(String::new())), span),
+                0 => Node::new(fresh_node_id(), span, Expr::Lit(Lit::Str(String::new()))),
                 1 => {
                     let p = parts.into_iter().next().unwrap();
-                    (p.0, span)
+                    Node::new(fresh_node_id(), span, p.inner)
                 }
                 // Left-fold into binary ++ calls so the type is Str -> Str -> Str.
                 _ => parts
                     .into_iter()
                     .reduce(|acc, part| {
-                        let op: Spanned<Expr> = (Expr::Var("++".into()), span.clone());
-                        let combined_span = acc.1.start..part.1.end;
-                        (Expr::App(Box::new(op), vec![acc, part]), combined_span)
+                        let op: Spanned<Expr> = Node::new(fresh_node_id(), span.clone(), Expr::Var("++".into()));
+                        let combined_span = acc.span.start..part.span.end;
+                        Node::new(fresh_node_id(), combined_span, Expr::App(Box::new(op), vec![acc, part]))
                     })
-                    .map(|(e, _)| (e, span))
+                    .map(|node| Node::new(fresh_node_id(), span, node.inner))
                     .unwrap(),
             });
 
@@ -422,7 +463,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
                     .then_ignore(just("->")),
             )
             .then(expr.clone())
-            .map_with_span(|(params, body), span| (Expr::Lam(params, Box::new(body)), span));
+            .map_with_span(|(params, body), span| Node::new(fresh_node_id(), span, Expr::Lam(params, Box::new(body))));
 
         // Block body: (name = expr | name : type | {fields} = expr ;)* expr
         let block_item = item_parser(expr.clone(), ident.clone());
@@ -434,7 +475,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             .then(expr.clone())
             .map_with_span(|(item_groups, body), span: Span| {
                 let items: Vec<BlockItem> = item_groups.into_iter().flatten().collect();
-                desugar_block(items, body, span)
+                desugar_block(items, body, span.clone())
             });
 
         let paren_block = block_body.padded().delimited_by(just('('), just(')'));
@@ -445,7 +486,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             .separated_by(just(','))
             .allow_trailing()
             .delimited_by(just('['), just(']'))
-            .map_with_span(|elems, span| (Expr::List(elems), span));
+            .map_with_span(|elems, span| Node::new(fresh_node_id(), span, Expr::List(elems)));
 
         // Record literal: {field: expr, ...}
         let record_field = ident
@@ -460,7 +501,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             .separated_by(just(','))
             .allow_trailing()
             .delimited_by(just('{'), just('}'))
-            .map_with_span(|fields, span| (Expr::Record(fields), span));
+            .map_with_span(|fields, span| Node::new(fresh_node_id(), span, Expr::Record(fields)));
 
         // Tag expression: `Tag` or `Tag atom` (uppercase name + optional atom payload).
         // If followed by whitespace + non-uppercase, consume as payload.
@@ -475,7 +516,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
                     .or_not()
             )
             .map_with_span(|(name, payload), span| {
-                (Expr::Tag(name, payload.map(Box::new)), span)
+                Node::new(fresh_node_id(), span, Expr::Tag(name, payload.map(Box::new)))
             });
 
         // Helper: parse a specific keyword (alphabetic token that equals kw).
@@ -514,7 +555,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             )
             .then(sep().ignore_then(otherwise_branch).or_not())
             .map_with_span(|((scrutinee, branches), otherwise), span| {
-                (Expr::When(Box::new(scrutinee), branches, otherwise.map(Box::new)), span)
+                Node::new(fresh_node_id(), span, Expr::When(Box::new(scrutinee), branches, otherwise.map(Box::new)))
             });
 
         // Plain backtick string (no interpolation) — used for import paths.
@@ -526,7 +567,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
         let import_expr = kw("import")
             .ignore_then(ws1())
             .ignore_then(plain_string)
-            .map_with_span(|path, span| (Expr::Import(path), span));
+            .map_with_span(|path, span| Node::new(fresh_node_id(), span, Expr::Import(path)));
 
         // Atom: strips LEADING whitespace and comments only (not trailing).
         // Trailing whitespace must remain for the infix `ws1` check.
@@ -537,6 +578,7 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             .ignored();
 
         let atom = leading_ws.ignore_then(choice((
+            float_lit,
             int_lit,
             template,
             lambda,
@@ -546,8 +588,8 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             record,
             paren_block,
             tag_expr,
-            ident.clone().map_with_span(|name, span| (Expr::Var(name), span)),
-            sym_name().map_with_span(|name, span| (Expr::Var(name), span)),
+            ident.clone().map_with_span(|name, span| Node::new(fresh_node_id(), span, Expr::Var(name))),
+            sym_name().map_with_span(|name, span| Node::new(fresh_node_id(), span, Expr::Var(name))),
         )));
 
         // Application: atom(arg, ...)* — no whitespace allowed before `(`
@@ -561,22 +603,46 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
         // Field access: .field — no whitespace before `.`
         let field = just('.').ignore_then(ident.clone());
 
-        // Postfix chain: application and field access, left-associative.
-        enum Postfix { Call(Vec<Spanned<Expr>>), Field(String) }
+        // Index argument: `i` (scalar), `i:j` (slice), or `arr` (fancy — array expr)
+        // We disambiguate slice by checking for `:` after the optional first expr.
+        let index_arg = {
+            let slice_bound = expr.clone().or_not();
+            // `i:j`, `:j`, `i:`, `:`
+            let slice = slice_bound.clone()
+                .then_ignore(just(':'))
+                .then(slice_bound)
+                .map(|(a, b)| IndexArg::Slice(a, b));
+            // plain expr — scalar index (Int) or fancy (array)
+            let plain = expr.clone().map(|e| IndexArg::Scalar(e));
+            slice.or(plain)
+        };
+
+        // `e[i]`, `e[i, j]` — no whitespace before `[`
+        let index_args = index_arg
+            .padded()
+            .separated_by(just(','))
+            .allow_trailing()
+            .at_least(1)
+            .delimited_by(just('['), just(']'));
+
+        // Postfix chain: application, field access, and indexing — left-associative.
+        enum Postfix { Call(Vec<Spanned<Expr>>), Field(String), Index(Vec<IndexArg>) }
         let app = atom
             .then(
                 choice((
                     args.map(Postfix::Call),
                     field.map(Postfix::Field),
+                    index_args.map(Postfix::Index),
                 ))
                 .repeated(),
             )
             .map_with_span(|(e, ops), span: Span| {
                 ops.into_iter().fold(e, |acc, op| {
-                    let acc_span = acc.1.start..span.end;
+                    let acc_span = acc.span.start..span.end;
                     match op {
-                        Postfix::Call(args) => (Expr::App(Box::new(acc), args), acc_span),
-                        Postfix::Field(name) => (Expr::Field(Box::new(acc), name), acc_span),
+                        Postfix::Call(args) => Node::new(fresh_node_id(), acc_span, Expr::App(Box::new(acc), args)),
+                        Postfix::Field(name) => Node::new(fresh_node_id(), acc_span, Expr::Field(Box::new(acc), name)),
+                        Postfix::Index(indices) => Node::new(fresh_node_id(), acc_span, Expr::Index(Box::new(acc), indices)),
                     }
                 })
             });
@@ -593,9 +659,9 @@ pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
             )
             .map_with_span(|(first, rest), span: Span| {
                 rest.into_iter().fold(first, |lhs, (op, rhs)| {
-                    let combined_span = lhs.1.start..rhs.1.end;
-                    let op_var: Spanned<Expr> = (Expr::Var(op), span.clone());
-                    (Expr::App(Box::new(op_var), vec![lhs, rhs]), combined_span)
+                    let combined_span = lhs.span.start..rhs.span.end;
+                    let op_var: Spanned<Expr> = Node::new(fresh_node_id(), span.clone(), Expr::Var(op));
+                    Node::new(fresh_node_id(), combined_span, Expr::App(Box::new(op_var), vec![lhs, rhs]))
                 })
             })
     })

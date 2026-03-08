@@ -10,6 +10,8 @@ typedef enum {
     CODA_TAG,
     CODA_RECORD,
     CODA_LIST,
+    CODA_FLOAT,
+    CODA_TENSOR,
 } CodaKind;
 
 typedef CodaVal* (*CodaFn)(CodaVal**, CodaVal**, int32_t);
@@ -19,15 +21,20 @@ struct CodaVal {
     int32_t rc;
     union {
         int64_t int_val;
+        double  float_val;
         char *str_val;
         struct { CodaFn fn; CodaVal **caps; int32_t ncaps; } closure;
         struct { const char *name; CodaVal *payload; } tag;
         struct { const char **keys; CodaVal **vals; int32_t nfields; } record;
         struct { CodaVal **items; int32_t len; } list;
+        struct { int64_t rows; int64_t cols; double *data; } tensor;
     };
 };
 
 CodaVal* coda_mk_int(int64_t n);
+int64_t  coda_unbox_int(CodaVal *v);
+CodaVal* coda_mk_float(double v);
+double   coda_unbox_float(CodaVal *v);
 CodaVal* coda_mk_str(const char *s);
 CodaVal* coda_mk_closure(CodaFn fn, CodaVal **caps, int32_t ncaps);
 CodaVal* coda_mk_tag(const char *name, CodaVal *payload);
@@ -72,3 +79,15 @@ CodaVal* coda_task_catch(CodaVal *task, CodaVal *handler);
 CodaVal* coda_task_print(CodaVal *s);
 CodaVal* coda_task_read_line(void);
 CodaVal* coda_run_task(CodaVal *task);
+
+/* Tensor operations */
+CodaVal* coda_mk_tensor(int64_t rows, int64_t cols);
+CodaVal* coda_mk_tensor_ones(int64_t rows, int64_t cols);
+CodaVal* coda_tensor_matmul(CodaVal *a, CodaVal *b);
+CodaVal* coda_tensor_add(CodaVal *a, CodaVal *b);
+CodaVal* coda_tensor_scale(CodaVal *t, double scalar);
+CodaVal* coda_tensor_reshape(int64_t rows, int64_t cols, CodaVal *t);
+CodaVal* coda_tensor_get(CodaVal *t, int64_t i, int64_t j);
+CodaVal* coda_tensor_set(CodaVal *t, int64_t i, int64_t j, CodaVal *val);
+int64_t  coda_tensor_rows(CodaVal *t);
+int64_t  coda_tensor_cols(CodaVal *t);
