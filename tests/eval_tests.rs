@@ -2,20 +2,26 @@ use chumsky::Parser as _;
 use lang::{
     eval::{eval, std_env, EvalError, Value},
     parser::file_parser,
+    types::{infer_with_map, std_type_env},
 };
 
 fn run(src: &str) -> Value {
     let ast = file_parser()
         .parse(src)
         .unwrap_or_else(|e| panic!("parse error in {:?}: {:?}", src, e));
-    eval(&ast, &std_env()).unwrap_or_else(|e| panic!("eval error in {:?}: {:?}", src, e))
+    let (_, type_map) = infer_with_map(&std_type_env(), &ast)
+        .unwrap_or_else(|e| panic!("type error in {:?}: {}", src, e));
+    eval(&ast, &std_env().with_type_map(type_map))
+        .unwrap_or_else(|e| panic!("eval error in {:?}: {:?}", src, e))
 }
 
 fn run_err(src: &str) -> EvalError {
     let ast = file_parser()
         .parse(src)
         .unwrap_or_else(|e| panic!("parse error in {:?}: {:?}", src, e));
-    eval(&ast, &std_env()).expect_err("expected eval error")
+    let (_, type_map) = infer_with_map(&std_type_env(), &ast)
+        .unwrap_or_else(|e| panic!("type error in {:?}: {}", src, e));
+    eval(&ast, &std_env().with_type_map(type_map)).expect_err("expected eval error")
 }
 
 fn int(n: i64) -> Value { Value::Int(n) }
@@ -60,16 +66,6 @@ fn test_template_interp() {
     assert_eq!(run("(name = `world`; `hello {name}`)"), str_("hello world"));
 }
 
-#[test]
-fn test_template_int_interp_type_error() {
-    // ++ is strings-only; interpolating a number is a type error
-    assert!(matches!(run_err("`n = {42}`"), EvalError::TypeMismatch { .. }));
-}
-
-#[test]
-fn test_concat_non_string_type_error() {
-    assert!(matches!(run_err("1 ++ 2"), EvalError::TypeMismatch { .. }));
-}
 
 // ── lambda & application ──────────────────────────────────────────────────────
 

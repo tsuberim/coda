@@ -2,7 +2,7 @@ use chumsky::Parser as _;
 use lang::{
     eval::{eval, run_task, std_env, Value},
     parser::file_parser,
-    types::{infer, std_type_env},
+    types::{infer_with_map, std_type_env},
 };
 
 /// Run a `.coda` file: parse, type-check, eval (and run tasks). Panic on any error.
@@ -21,16 +21,16 @@ fn run_corpus(path: &str) {
         .unwrap_or_else(|e| panic!("parse error in {}: {:?}", path, e));
 
     if expects_type_error {
-        infer(&std_type_env(), &ast)
+        infer_with_map(&std_type_env(), &ast)
             .err()
             .unwrap_or_else(|| panic!("expected a type error in {} but inference succeeded", path));
         return;
     }
 
-    infer(&std_type_env(), &ast)
+    let (_, type_map) = infer_with_map(&std_type_env(), &ast)
         .unwrap_or_else(|e| panic!("type error in {}: {}", path, e));
 
-    let value = eval(&ast, &std_env())
+    let value = eval(&ast, &std_env().with_type_map(type_map))
         .unwrap_or_else(|e| panic!("eval error in {}: {}", path, e));
 
     // Run tasks to completion.
@@ -111,3 +111,15 @@ fn run_corpus(path: &str) {
 
 // tensor tests
 #[test] fn test_tensors() { run_corpus("corpus/tensors.coda"); }
+
+// shaped array tests
+#[test] fn test_array_add()                  { run_corpus("corpus/array_add.coda"); }
+#[test] fn test_array_broadcast_scalar()     { run_corpus("corpus/array_broadcast_scalar.coda"); }
+#[test] fn test_array_broadcast_scalar_left(){ run_corpus("corpus/array_broadcast_scalar_left.coda"); }
+#[test] fn test_array_lift_fn()              { run_corpus("corpus/array_lift_fn.coda"); }
+#[test] fn test_array_lift_multi()           { run_corpus("corpus/array_lift_multi.coda"); }
+#[test] fn test_array_rank2()                { run_corpus("corpus/array_rank2.coda"); }
+#[test] fn test_array_index()                { run_corpus("corpus/array_index.coda"); }
+#[test] fn test_array_slice()                { run_corpus("corpus/array_slice.coda"); }
+#[test] fn test_array_dot()                  { run_corpus("corpus/array_dot.coda"); }
+#[test] fn test_array_broadcast_fail()       { run_corpus("corpus/array_broadcast_fail.coda"); }
