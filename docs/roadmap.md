@@ -58,6 +58,10 @@ Full set of native numeric primitives: `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `
 
 Spawn parallel tasks with `parallel : List(Task a e) -> Task (List a) e`. Pure, immutable values are safe to share across threads with no locks — RC is the only hazard, replaced with atomic RC for shared values. The runtime manages a thread pool; the type system ensures no mutable state crosses thread boundaries. Builds naturally on the `Task` monad: threads are just concurrent effects.
 
-## 15. GPU acceleration
+## 15. Linter and formatter
+
+`coda fmt` — opinionated, zero-config formatter: canonical indentation, spacing, trailing commas, import ordering. One style, no arguments. `coda lint` — static checks beyond type errors: unused bindings, redundant `otherwise`, shadowed variables, suspicious patterns. Both operate on the existing AST; formatter pretty-prints it, linter walks it for known anti-patterns. Like `gofmt` — the community converges on one style because there is only one style.
+
+## 16. GPU acceleration
 
 Lower `Tensor` operations to GPU kernels. Pure tensor expressions are effect-free and trivially parallelisable — the compiler schedules them onto the GPU automatically. `gpu_map`, `gpu_matmul`, and friends emit LLVM NVPTX/AMDGPU IR or call into a runtime that dispatches via Metal/CUDA/WebGPU. Wrapped in `Task` where data transfer is involved.
