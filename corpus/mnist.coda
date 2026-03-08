@@ -1,0 +1,171 @@
+-- mnist.coda — 2-layer MLP trained on MNIST from scratch.
+--
+-- Network: 784 → 128 (ReLU) → 10 (softmax)
+-- Training: SGD, one sample at a time, cross-entropy loss.
+--
+-- Builtins needed (not yet implemented):
+--   >.   : F64 F64 -> [True | False]   float comparison (auto-lifted)
+--   exp  : F64 -> F64                  (auto-lifted)
+--   log  : F64 -> F64                  (auto-lifted)
+--   sum  : F64[n] -> F64               reduce-sum
+--   outer : F64[m] F64[n] -> F64[m, n] outer product
+--   transpose : F64[m, n] -> F64[n, m]
+--   argmax    : F64[n] -> Int
+--   rand_normal : Int Int -> F64[m, n]
+--   zeros_1d  : Int -> F64[n]
+--   int_to_f64 : Int -> F64            (auto-lifted)
+--   reshape   : Int Int Int[n] -> Int[m, n]
+--   read_bytes : Str -> Task Int[n] [IoErr Str | r]
+
+-- ── Hyperparameters ───────────────────────────────────────────────
+
+lr     = 0.01
+epochs = 10
+hidden = 128
+
+-- ── Activation functions ──────────────────────────────────────────
+
+-- relu and its derivative — scalar fns, auto-lifted over F64[n]
+relu   = \x -> when (x >. 0.0) is; True -> x;   False -> 0.0
+relu_d = \x -> when (x >. 0.0) is; True -> 1.0; False -> 0.0
+
+-- softmax : F64[n] -> F64[n]
+softmax = \xs -> (exps = exp(xs); exps /. sum(exps))
+
+-- ── One-hot encoding ──────────────────────────────────────────────
+
+-- Builds F64[n] with 1.0 at index k, 0.0 elsewhere.
+one_hot = \n k ->
+  fix(\loop acc i ->
+    when (i == n) is
+    True  -> acc
+    False -> (
+      v = when (i == k) is; True -> 1.0; False -> 0.0;
+      loop(v :: acc, i + 1)
+    )
+  )([], 0)
+
+-- ── Forward pass ──────────────────────────────────────────────────
+--
+-- w  : {w1: F64[128, 784], b1: F64[128], w2: F64[10, 128], b2: F64[10]}
+-- x  : F64[784]
+-- →  {pred: F64[10], h: F64[128], z1: F64[128]}
+
+forward = \w x -> (
+  z1   = matmul(w.w1, x) +. w.b1;
+  h    = relu(z1);
+  z2   = matmul(w.w2, h) +. w.b2;
+  pred = softmax(z2);
+  {pred: pred, h: h, z1: z1}
+)
+
+-- ── Loss ──────────────────────────────────────────────────────────
+
+cross_entropy = \label pred -> 0.0 -. log(pred[label])
+
+-- ── Backward pass ─────────────────────────────────────────────────
+
+backward = \w x label fwd -> (
+  d2  = fwd.pred -. one_hot(10, label);
+  dw2 = outer(d2, fwd.h);
+  db2 = d2;
+  d1  = relu_d(fwd.z1) *. matmul(transpose(w.w2), d2);
+  dw1 = outer(d1, x);
+  db1 = d1;
+  {w1: dw1, b1: db1, w2: dw2, b2: db2}
+)
+
+-- ── SGD update ────────────────────────────────────────────────────
+
+update = \w grads -> (
+  {w1: w.w1 -. (lr *. grads.w1),
+   b1: w.b1 -. (lr *. grads.b1),
+   w2: w.w2 -. (lr *. grads.w2),
+   b2: w.b2 -. (lr *. grads.b2)}
+)
+
+-- ── Train one sample ──────────────────────────────────────────────
+
+train_one = \w x label -> (
+  fwd   = forward(w, x);
+  grads = backward(w, x, label, fwd);
+  update(w, grads)
+)
+
+-- ── Train one epoch ───────────────────────────────────────────────
+
+train_epoch = \w images labels n ->
+  fix(\loop w i ->
+    when (i == n) is
+    True  -> w
+    False -> loop(train_one(w, images[i], labels[i]), i + 1)
+  )(w, 0)
+
+-- ── Accuracy ──────────────────────────────────────────────────────
+
+predict = \w x -> argmax(forward(w, x).pred)
+
+accuracy = \w images labels n -> (
+  correct = fix(\loop acc i ->
+    when (i == n) is
+    True  -> acc
+    False -> (
+      hit = when (predict(w, images[i]) == labels[i]) is; True -> 1; False -> 0;
+      loop(acc + hit, i + 1)
+    )
+  )(0, 0);
+  int_to_f64(correct) /. int_to_f64(n)
+)
+
+-- ── Data loading ──────────────────────────────────────────────────
+--
+-- MNIST IDX binary format:
+--   images file: magic(4) count(4) rows(4) cols(4) pixels...
+--   labels file: magic(4) count(4) labels...
+
+load_images = \path n -> (
+  bytes  <- read_bytes(path);
+  pixels = bytes[16 : 16 + n * 784];
+  mat    = reshape(n, 784, pixels);
+  ok(int_to_f64(mat) /. 255.0)
+)
+
+load_labels = \path n -> (
+  bytes <- read_bytes(path);
+  ok(bytes[8 : 8 + n])
+)
+
+-- ── Weight initialisation ─────────────────────────────────────────
+
+init_weights =
+  {w1: rand_normal(hidden, 784) *. 0.1,
+   b1: zeros_1d(hidden),
+   w2: rand_normal(10, hidden) *. 0.1,
+   b2: zeros_1d(10)}
+
+-- ── Main ──────────────────────────────────────────────────────────
+
+n_train = 60000
+n_test  = 10000
+
+main = (
+  images      <- load_images(`data/train-images-idx3-ubyte`, n_train);
+  labels      <- load_labels(`data/train-labels-idx1-ubyte`, n_train);
+  test_images <- load_images(`data/t10k-images-idx3-ubyte`,  n_test);
+  test_labels <- load_labels(`data/t10k-labels-idx1-ubyte`,  n_test);
+  w = init_weights;
+  w_trained = fix(\loop w epoch ->
+    when (epoch == epochs) is
+    True  -> w
+    False -> (
+      w2  = train_epoch(w, images, labels, n_train);
+      acc = accuracy(w2, images, labels, 1000);
+      _ <- print(`epoch {epoch}: acc = {acc}`);
+      loop(w2, epoch + 1)
+    )
+  )(w, 0);
+  test_acc = accuracy(w_trained, test_images, test_labels, n_test);
+  print(`final test accuracy: {test_acc}`)
+)
+
+main
