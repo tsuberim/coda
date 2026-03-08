@@ -143,10 +143,13 @@ fn repl() {
                                 }
                                 BlockItem::Bind(name, expr) => {
                                     let type_result = infer_scheme(&type_env, expr)
-                                        .and_then(|s| lang::types::enforce_binding(&type_env, name, s));
+                                        .and_then(|s| lang::types::enforce_binding(&type_env, name, s).map_err(|e| {
+                                            // enforce_binding returns TypeError; wrap with a dummy span
+                                            lang::types::InferError { kind: e, span: 0..0 }
+                                        }));
                                     match type_result {
                                         Err(e) => {
-                                            eprintln!("{} {e}", "type error:".red().bold());
+                                            eprintln!("{}", e.render("<repl>", src));
                                             break 'items;
                                         }
                                         Ok(scheme) => match eval(expr, &env) {
@@ -176,7 +179,7 @@ fn repl() {
                                 BlockItem::MonadicBind(name, expr) => {
                                     // Type-check: expr must be Task ok err. Extract ok type.
                                     let scheme = match infer_scheme(&type_env, expr) {
-                                        Err(e) => { eprintln!("{} {e}", "type error:".red().bold()); break 'items; }
+                                        Err(e) => { eprintln!("{}", e.render("<repl>", src)); break 'items; }
                                         Ok(s) => s,
                                     };
                                     let ok_scheme = match &scheme.ty {
@@ -219,7 +222,7 @@ fn repl() {
                     }
                     Ok(ReplInput::Expr(expr)) => {
                         match infer(&type_env, &expr) {
-                            Err(e) => eprintln!("{} {e}", "type error:".red().bold()),
+                            Err(e) => eprintln!("{}", e.render("<repl>", src)),
                             Ok(ty) => match eval(&expr, &env) {
                                 Ok(Value::Task(ref f)) => {
                                     let (ok_ty, err_ty) = match &ty {
@@ -250,19 +253,35 @@ fn repl() {
 }
 
 fn interpret(path: PathBuf) {
-    match lang::module::load_module(&path.to_string_lossy()) {
-        Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
-        Ok(entry) => match entry.val {
-            Value::Task(_) => match run_task(&entry.val) {
-                Ok(result) => {
-                    if result != Value::Record(vec![]) {
-                        println!("{}", result);
-                    }
-                }
-                Err(err_val) => { eprintln!("error: {}", err_val); std::process::exit(1); }
-            },
-            _ => println!("{} : {}", entry.val, entry.ty),
+    let src = read_file(&path);
+    let filename = path.to_str().unwrap_or("?");
+
+    let ast = match file_parser().parse(src.as_str()) {
+        Ok(ast) => ast,
+        Err(errs) => {
+            for e in errs { eprintln!("{}:{}", filename, e); }
+            std::process::exit(1);
         }
+    };
+
+    let ty = match infer(&std_type_env(), &ast) {
+        Ok(ty) => ty,
+        Err(e) => { eprintln!("{}", e.render(filename, &src)); std::process::exit(1); }
+    };
+
+    let val = match eval(&ast, &std_env()) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
+    };
+
+    match val {
+        Value::Task(_) => match run_task(&val) {
+            Ok(result) => {
+                if result != Value::Record(vec![]) { println!("{}", result); }
+            }
+            Err(err_val) => { eprintln!("error: {}", err_val); std::process::exit(1); }
+        },
+        _ => println!("{} : {}", val, ty),
     }
 }
 
@@ -278,7 +297,10 @@ fn compile(path: PathBuf, output: Option<PathBuf>) {
     };
     let ty = match lang::types::infer(&lang::types::std_type_env(), &ast) {
         Ok(ty) => ty,
-        Err(e) => { eprintln!("type error: {e}"); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("{}", e.render(path.to_str().unwrap_or("?"), &src));
+            std::process::exit(1);
+        }
     };
     let is_task = matches!(&ty, lang::types::Type::Con(name, _) if name == "Task");
     let ir = match lang::codegen::compile(&ast, is_task) {

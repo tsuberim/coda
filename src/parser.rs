@@ -43,7 +43,7 @@ fn destr_fields() -> impl Parser<char, Vec<(String, String)>, Error = Simple<cha
 /// `ident` controls which names are accepted as binding targets (keyword-rejecting inside blocks,
 /// plain outside). Returns `Vec<BlockItem>` so destructuring can yield multiple bindings.
 fn item_parser(
-    ep: impl Parser<char, Expr, Error = Simple<char>> + Clone + 'static,
+    ep: impl Parser<char, Spanned<Expr>, Error = Simple<char>> + Clone + 'static,
     ident: impl Parser<char, String, Error = Simple<char>> + Clone + 'static,
 ) -> impl Parser<char, Vec<BlockItem>, Error = Simple<char>> + Clone {
     let val_binding = ident.clone()
@@ -66,14 +66,19 @@ fn item_parser(
         .then_ignore(assign())
         .then_ignore(hws())
         .then(ep.clone())
-        .map(|(fields, rhs)| {
+        .map_with_span(|(fields, rhs), span: Span| {
             let tmp = fresh_tmp();
             let mut items = vec![BlockItem::Bind(tmp.clone(), rhs)];
             for (field, bind_name) in fields {
-                items.push(BlockItem::Bind(
-                    bind_name,
-                    Expr::Field(Box::new(Expr::Var(tmp.clone())), field),
-                ));
+                // synthetic span for the desugared Field access — use the whole destructure span
+                let field_expr: Spanned<Expr> = (
+                    Expr::Field(
+                        Box::new((Expr::Var(tmp.clone()), span.clone())),
+                        field,
+                    ),
+                    span.clone(),
+                );
+                items.push(BlockItem::Bind(bind_name, field_expr));
             }
             items
         })
@@ -93,20 +98,37 @@ fn item_parser(
     val_binding.boxed().or(ann_binding).or(destr_binding).or(monadic_bind)
 }
 
-/// Desugar a block's items + final expression into an `Expr`.
+/// Desugar a block's items + final expression into a `Spanned<Expr>`.
 /// `MonadicBind(x, e)` items are folded right-to-left into `e >>= \x -> rest`.
 /// Regular items are preserved as `Block` nodes.
-fn desugar_block(items: Vec<BlockItem>, body: Expr) -> Expr {
+fn desugar_block(items: Vec<BlockItem>, body: Spanned<Expr>, span: Span) -> Spanned<Expr> {
     if !items.iter().any(|i| matches!(i, BlockItem::MonadicBind(_, _))) {
-        return if items.is_empty() { body } else { Expr::Block(items, Box::new(body)) };
+        return if items.is_empty() {
+            body
+        } else {
+            (Expr::Block(items, Box::new(body)), span)
+        };
     }
-    items.into_iter().rev().fold(body, |acc, item| match item {
-        BlockItem::MonadicBind(name, e) => Expr::App(
-            Box::new(Expr::Var(">>=".into())),
-            vec![e, Expr::Lam(vec![name], Box::new(acc))],
-        ),
-        BlockItem::Bind(name, e) => Expr::Block(vec![BlockItem::Bind(name, e)], Box::new(acc)),
-        BlockItem::Ann(name, te) => Expr::Block(vec![BlockItem::Ann(name, te)], Box::new(acc)),
+    items.into_iter().rev().fold(body, |acc, item| {
+        let acc_span = acc.1.clone();
+        match item {
+            BlockItem::MonadicBind(name, e) => {
+                let e_span = e.1.clone();
+                let lam_span = acc_span.clone();
+                let lam: Spanned<Expr> = (Expr::Lam(vec![name], Box::new(acc)), lam_span.clone());
+                let bind_var: Spanned<Expr> = (Expr::Var(">>=".into()), e_span.clone());
+                (Expr::App(Box::new(bind_var), vec![e, lam]), lam_span)
+            }
+            BlockItem::Bind(name, e) => {
+                let item_span = e.1.clone();
+                let block_span = item_span.start..acc_span.end;
+                (Expr::Block(vec![BlockItem::Bind(name, e)], Box::new(acc)), block_span)
+            }
+            BlockItem::Ann(name, te) => {
+                let block_span = span.clone();
+                (Expr::Block(vec![BlockItem::Ann(name, te)], Box::new(acc)), block_span)
+            }
+        }
     })
 }
 
@@ -332,8 +354,8 @@ pub fn type_expr_parser() -> impl Parser<char, crate::ast::TypeExpr, Error = Sim
     })
 }
 
-pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
-    recursive(|expr: Recursive<char, Expr, Simple<char>>| {
+pub fn expr_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
+    recursive(|expr: Recursive<char, Spanned<Expr>, Simple<char>>| {
         // Inside expressions, binding names must not be keywords.
         let ident = plain_ident().try_map(|s, span| {
             if KEYWORDS.contains(&s.as_str()) {
@@ -352,7 +374,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
         let int_lit = digits
             .clone()
-            .map(|s: String| Expr::Lit(Lit::Int(s.parse().unwrap())));
+            .map_with_span(|s: String, span| (Expr::Lit(Lit::Int(s.parse().unwrap())), span));
 
         // Template string: `...{expr}...`
         // Desugars to ++(part, ...) or a plain Lit::Str for no interpolations.
@@ -360,7 +382,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .repeated()
             .at_least(1)
             .collect::<String>()
-            .map(|s| Expr::Lit(Lit::Str(s)));
+            .map_with_span(|s, span| (Expr::Lit(Lit::Str(s)), span));
 
         let tmpl_interp = expr
             .clone()
@@ -371,15 +393,21 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .or(tmpl_interp)
             .repeated()
             .delimited_by(just('`'), just('`'))
-            .map(|parts| match parts.len() {
-                0 => Expr::Lit(Lit::Str(String::new())),
-                1 => parts.into_iter().next().unwrap(),
+            .map_with_span(|parts, span: Span| match parts.len() {
+                0 => (Expr::Lit(Lit::Str(String::new())), span),
+                1 => {
+                    let p = parts.into_iter().next().unwrap();
+                    (p.0, span)
+                }
                 // Left-fold into binary ++ calls so the type is Str -> Str -> Str.
                 _ => parts
                     .into_iter()
                     .reduce(|acc, part| {
-                        Expr::App(Box::new(Expr::Var("++".into())), vec![acc, part])
+                        let op: Spanned<Expr> = (Expr::Var("++".into()), span.clone());
+                        let combined_span = acc.1.start..part.1.end;
+                        (Expr::App(Box::new(op), vec![acc, part]), combined_span)
                     })
+                    .map(|(e, _)| (e, span))
                     .unwrap(),
             });
 
@@ -394,7 +422,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                     .then_ignore(just("->")),
             )
             .then(expr.clone())
-            .map(|(params, body)| Expr::Lam(params, Box::new(body)));
+            .map_with_span(|(params, body), span| (Expr::Lam(params, Box::new(body)), span));
 
         // Block body: (name = expr | name : type | {fields} = expr ;)* expr
         let block_item = item_parser(expr.clone(), ident.clone());
@@ -404,9 +432,9 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then_ignore(sep())
             .repeated()
             .then(expr.clone())
-            .map(|(item_groups, body)| {
+            .map_with_span(|(item_groups, body), span: Span| {
                 let items: Vec<BlockItem> = item_groups.into_iter().flatten().collect();
-                desugar_block(items, body)
+                desugar_block(items, body, span)
             });
 
         let paren_block = block_body.padded().delimited_by(just('('), just(')'));
@@ -417,7 +445,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .separated_by(just(','))
             .allow_trailing()
             .delimited_by(just('['), just(']'))
-            .map(Expr::List);
+            .map_with_span(|elems, span| (Expr::List(elems), span));
 
         // Record literal: {field: expr, ...}
         let record_field = ident
@@ -432,7 +460,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .separated_by(just(','))
             .allow_trailing()
             .delimited_by(just('{'), just('}'))
-            .map(Expr::Record);
+            .map_with_span(|fields, span| (Expr::Record(fields), span));
 
         // Tag expression: `Tag` or `Tag atom` (uppercase name + optional atom payload).
         // If followed by whitespace + non-uppercase, consume as payload.
@@ -446,7 +474,9 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                     .ignore_then(expr.clone())
                     .or_not()
             )
-            .map(|(name, payload)| Expr::Tag(name, payload.map(Box::new)));
+            .map_with_span(|(name, payload), span| {
+                (Expr::Tag(name, payload.map(Box::new)), span)
+            });
 
         // Helper: parse a specific keyword (alphabetic token that equals kw).
         let kw = |kw: &'static str| {
@@ -483,8 +513,8 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                     .map(|(first, rest)| std::iter::once(first).chain(rest).collect::<Vec<_>>())
             )
             .then(sep().ignore_then(otherwise_branch).or_not())
-            .map(|((scrutinee, branches), otherwise)| {
-                Expr::When(Box::new(scrutinee), branches, otherwise.map(Box::new))
+            .map_with_span(|((scrutinee, branches), otherwise), span| {
+                (Expr::When(Box::new(scrutinee), branches, otherwise.map(Box::new)), span)
             });
 
         // Plain backtick string (no interpolation) — used for import paths.
@@ -496,7 +526,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         let import_expr = kw("import")
             .ignore_then(ws1())
             .ignore_then(plain_string)
-            .map(Expr::Import);
+            .map_with_span(|path, span| (Expr::Import(path), span));
 
         // Atom: strips LEADING whitespace and comments only (not trailing).
         // Trailing whitespace must remain for the infix `ws1` check.
@@ -516,8 +546,8 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             record,
             paren_block,
             tag_expr,
-            ident.clone().map(Expr::Var),
-            sym_name().map(Expr::Var),
+            ident.clone().map_with_span(|name, span| (Expr::Var(name), span)),
+            sym_name().map_with_span(|name, span| (Expr::Var(name), span)),
         )));
 
         // Application: atom(arg, ...)* — no whitespace allowed before `(`
@@ -532,7 +562,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         let field = just('.').ignore_then(ident.clone());
 
         // Postfix chain: application and field access, left-associative.
-        enum Postfix { Call(Vec<Expr>), Field(String) }
+        enum Postfix { Call(Vec<Spanned<Expr>>), Field(String) }
         let app = atom
             .then(
                 choice((
@@ -541,10 +571,13 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 ))
                 .repeated(),
             )
-            .map(|(e, ops)| {
-                ops.into_iter().fold(e, |acc, op| match op {
-                    Postfix::Call(args) => Expr::App(Box::new(acc), args),
-                    Postfix::Field(name) => Expr::Field(Box::new(acc), name),
+            .map_with_span(|(e, ops), span: Span| {
+                ops.into_iter().fold(e, |acc, op| {
+                    let acc_span = acc.1.start..span.end;
+                    match op {
+                        Postfix::Call(args) => (Expr::App(Box::new(acc), args), acc_span),
+                        Postfix::Field(name) => (Expr::Field(Box::new(acc), name), acc_span),
+                    }
                 })
             });
 
@@ -558,9 +591,11 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                     .then(app.clone())
                     .repeated(),
             )
-            .map(|(first, rest)| {
+            .map_with_span(|(first, rest), span: Span| {
                 rest.into_iter().fold(first, |lhs, (op, rhs)| {
-                    Expr::App(Box::new(Expr::Var(op)), vec![lhs, rhs])
+                    let combined_span = lhs.1.start..rhs.1.end;
+                    let op_var: Spanned<Expr> = (Expr::Var(op), span.clone());
+                    (Expr::App(Box::new(op_var), vec![lhs, rhs]), combined_span)
                 })
             })
     })
@@ -569,7 +604,7 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 /// A single REPL input: one or more bindings/annotations, a bare expression, or nothing.
 pub enum ReplInput {
     Items(Vec<BlockItem>),
-    Expr(Expr),
+    Expr(Spanned<Expr>),
     Nop,
 }
 
@@ -586,15 +621,15 @@ pub fn repl_parser() -> impl Parser<char, ReplInput, Error = Simple<char>> {
 }
 
 /// Parse a complete file (top-level block without surrounding parens).
-pub fn file_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
+pub fn file_parser() -> impl Parser<char, Spanned<Expr>, Error = Simple<char>> {
     let ep = expr_parser().boxed();
     item_parser(ep.clone(), plain_ident())
         .then_ignore(sep())
         .repeated()
         .then(ep)
-        .map(|(item_groups, body)| {
+        .map_with_span(|(item_groups, body), span: Span| {
             let items: Vec<BlockItem> = item_groups.into_iter().flatten().collect();
-            desugar_block(items, body)
+            desugar_block(items, body, span)
         })
         .padded_by(padding())
         .then_ignore(end())

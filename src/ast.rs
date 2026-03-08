@@ -1,3 +1,6 @@
+pub type Span = std::ops::Range<usize>;
+pub type Spanned<T> = (T, Span);
+
 /// Surface type syntax — used in annotations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
@@ -15,9 +18,9 @@ pub enum TypeExpr {
 /// but kept as-is for the REPL which executes tasks step by step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockItem {
-    Bind(String, Expr),
+    Bind(String, Spanned<Expr>),
     Ann(String, TypeExpr),
-    MonadicBind(String, Expr),
+    MonadicBind(String, Spanned<Expr>),
 }
 
 /// Core AST. Infix `a + b` desugars to `App(Var("+"), [a, b])`.
@@ -25,23 +28,23 @@ pub enum BlockItem {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Var(String),
-    Lam(Vec<String>, Box<Expr>),
-    App(Box<Expr>, Vec<Expr>),
+    Lam(Vec<String>, Box<Spanned<Expr>>),
+    App(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
     Lit(Lit),
     /// `(x = e1; y : T; body)` — bindings and annotations scoped to body.
-    Block(Vec<BlockItem>, Box<Expr>),
+    Block(Vec<BlockItem>, Box<Spanned<Expr>>),
     /// `{field: expr, ...}`
-    Record(Vec<(String, Expr)>),
+    Record(Vec<(String, Spanned<Expr>)>),
     /// `expr.field`
-    Field(Box<Expr>, String),
+    Field(Box<Spanned<Expr>>, String),
     /// `Tag` or `Tag expr`
-    Tag(String, Option<Box<Expr>>),
+    Tag(String, Option<Box<Spanned<Expr>>>),
     /// `when scrutinee is (Tag binding? -> body)+ (otherwise body)?`
-    When(Box<Expr>, Vec<(String, Option<String>, Box<Expr>)>, Option<Box<Expr>>),
+    When(Box<Spanned<Expr>>, Vec<(String, Option<String>, Box<Spanned<Expr>>)>, Option<Box<Spanned<Expr>>>),
     /// `import \`path\`` — statically known path, resolved at type-check and eval time.
     Import(String),
     /// `[e1, e2, ...]` — list literal.
-    List(Vec<Expr>),
+    List(Vec<Spanned<Expr>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

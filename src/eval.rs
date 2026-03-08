@@ -15,7 +15,7 @@ pub enum Value {
     Tag(String, Box<Value>),
     Closure {
         params: Vec<String>,
-        body: Box<Expr>,
+        body: Box<Spanned<Expr>>,
         env: Env,
     },
     Builtin(String, Rc<dyn Fn(Vec<Value>) -> Result<Value, EvalError>>),
@@ -181,7 +181,8 @@ impl fmt::Display for EvalError {
 
 // ── Eval ──────────────────────────────────────────────────────────────────────
 
-pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
+pub fn eval(expr: &Spanned<Expr>, env: &Env) -> Result<Value, EvalError> {
+    let (expr, _) = expr;
     match expr {
         Expr::Lit(lit) => Ok(match lit {
             Lit::Int(n) => Value::Int(*n),
@@ -215,7 +216,7 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
         }
 
         Expr::Field(expr, name) => {
-            match eval(expr, env)? {
+            match eval(expr.as_ref(), env)? {
                 Value::Record(fields) => fields.into_iter()
                     .find(|(k, _)| k == name)
                     .map(|(_, v)| v)
@@ -236,7 +237,7 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
         }
 
         Expr::When(scrutinee, branches, otherwise) => {
-            match eval(scrutinee, env)? {
+            match eval(scrutinee.as_ref(), env)? {
                 Value::Tag(tag, payload) => {
                     for (branch_tag, binding, body) in branches {
                         if &tag == branch_tag {
@@ -288,7 +289,7 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
                     crate::ast::BlockItem::MonadicBind(_, _) => unreachable!("desugared at parse time"),
                 }
             }
-            eval(body, &cur)
+            eval(body.as_ref(), &cur)
         }
     }
 }
@@ -306,7 +307,7 @@ fn apply(f: Value, args: Vec<Value>) -> Result<Value, EvalError> {
             for (param, arg) in params.iter().zip(args) {
                 frame.set(param, arg);
             }
-            eval(&body, &frame)
+            eval(&*body, &frame)
         }
         Value::Builtin(_, f) => f(args),
         other => Err(EvalError::TypeMismatch {

@@ -30,9 +30,9 @@ Add `<`, `>`, `<=`, `>=`, `/`, `%` builtins. Needed for non-trivial programs. St
 
 Allow `f = \x -> ... f(x) ...` at file level. Currently requires `fix`. The compiler can detect this pattern and emit a labeled loop or a forward-declared function pointer, avoiding the `fix` overhead entirely.
 
-## 8. Improved error messages
+## ✓ 8. Improved error messages
 
-Type errors currently print raw type expressions. Add source spans to the AST (from chumsky), thread them through inference, and use `ariadne` (already a dep) to render underlined error messages pointing at the source.
+Spans added to every `Expr` node (`Spanned<T> = (T, Range<usize>)`). `infer_inner` threads spans through and errors carry `(TypeError, Span)`. `InferError::render` uses `ariadne` to produce underlined diagnostics with file/line/column context.
 
 ## 9. Float type
 

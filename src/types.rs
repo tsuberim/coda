@@ -5,7 +5,7 @@ use std::{
 
 use colored::Colorize;
 
-use crate::ast::{BlockItem, Expr, Lit, TypeExpr};
+use crate::ast::{BlockItem, Expr, Lit, Span, Spanned, TypeExpr};
 
 // ── Type ──────────────────────────────────────────────────────────────────────
 
@@ -274,6 +274,39 @@ impl fmt::Display for TypeError {
     }
 }
 
+// ── InferError ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct InferError {
+    pub kind: TypeError,
+    pub span: Span,
+}
+
+impl fmt::Display for InferError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.kind)
+    }
+}
+
+impl InferError {
+    pub fn render(&self, filename: &str, src: &str) -> String {
+        use ariadne::{Color, Label, Report, ReportKind, sources};
+        let mut out = Vec::<u8>::new();
+        let span = (filename.to_string(), self.span.clone());
+        Report::build(ReportKind::Error, span.clone())
+            .with_message(self.kind.to_string())
+            .with_label(
+                Label::new(span)
+                    .with_message(self.kind.to_string())
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .write(sources([(filename.to_string(), src.to_string())]), &mut out)
+            .unwrap_or(());
+        String::from_utf8_lossy(&out).into_owned()
+    }
+}
+
 // ── Unification ───────────────────────────────────────────────────────────────
 
 fn unify(ctx: &mut Ctx, t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
@@ -456,14 +489,15 @@ fn generalize(env: &TypeEnv, ty: &Type) -> Scheme {
 
 // ── Algorithm W ───────────────────────────────────────────────────────────────
 
-fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type), TypeError> {
+fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Spanned<Expr>) -> Result<(Subst, Type), (TypeError, Span)> {
+    let (expr, span) = expr;
     match expr {
         Expr::Lit(Lit::Int(_)) => Ok((Subst::new(), Type::int())),
         Expr::Lit(Lit::Str(_)) => Ok((Subst::new(), Type::str_())),
 
         Expr::Var(name) => {
             let scheme = env.get(name)
-                .ok_or_else(|| TypeError::UnboundVar(name.clone()))?;
+                .ok_or_else(|| (TypeError::UnboundVar(name.clone()), span.clone()))?;
             Ok((Subst::new(), ctx.instantiate(scheme)))
         }
 
@@ -497,7 +531,8 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                 Type::fun(arg_tys_subst, apply_subst(&s, &ret))
             };
 
-            let su = unify(ctx, &apply_subst(&s, &f_ty), &expected)?;
+            let su = unify(ctx, &apply_subst(&s, &f_ty), &expected)
+                .map_err(|e| (e, span.clone()))?;
             let s_final = compose(&su, &s);
             Ok((s_final.clone(), apply_subst(&s_final, &ret)))
         }
@@ -521,7 +556,7 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                     let field_ty = ctx.fresh();
                     let row = ctx.fresh_name();
                     let record_ty = Type::Record(vec![(name.clone(), field_ty.clone())], Some(row));
-                    let su = bind(&v, &record_ty)?;
+                    let su = bind(&v, &record_ty).map_err(|e| (e, span.clone()))?;
                     let s_final = compose(&su, &s);
                     Ok((s_final, field_ty))
                 }
@@ -536,18 +571,18 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                                     vec![(name.clone(), field_ty.clone())],
                                     Some(new_row),
                                 );
-                                let su = bind(&r, &extension)?;
+                                let su = bind(&r, &extension).map_err(|e| (e, span.clone()))?;
                                 let s_final = compose(&su, &s);
                                 Ok((s_final, field_ty))
                             }
-                            None => Err(TypeError::NoSuchField(
+                            None => Err((TypeError::NoSuchField(
                                 name.clone(),
                                 Type::Record(fields, None),
-                            )),
+                            ), span.clone())),
                         },
                     }
                 }
-                other => Err(TypeError::NotARecord(other)),
+                other => Err((TypeError::NotARecord(other), span.clone())),
             }
         }
 
@@ -586,7 +621,8 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
 
             // Unify scrutinee with expected union shape.
             let scrut_current = apply_subst(&s, &scrut_ty);
-            let su = unify(ctx, &scrut_current, &scrut_union)?;
+            let su = unify(ctx, &scrut_current, &scrut_union)
+                .map_err(|e| (e, span.clone()))?;
             s = compose(&su, &s);
 
             // Dead `otherwise` check: after unification, if `otherwise` was present
@@ -594,7 +630,7 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
             if otherwise.is_some() {
                 let scrut_final = apply_subst(&s, &scrut_ty);
                 if let Type::Union(_, None) = scrut_final {
-                    return Err(TypeError::DeadOtherwise);
+                    return Err((TypeError::DeadOtherwise, span.clone()));
                 }
             }
 
@@ -605,12 +641,14 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                     env2.insert(b.clone(), Scheme::mono(apply_subst(&s, payload_ty)));
                 } else {
                     // No binding → payload is unit (tag written without payload).
-                    let su = unify(ctx, &apply_subst(&s, payload_ty), &Type::unit())?;
+                    let su = unify(ctx, &apply_subst(&s, payload_ty), &Type::unit())
+                        .map_err(|e| (e, span.clone()))?;
                     s = compose(&su, &s);
                 }
                 let (sb, body_ty) = infer_inner(ctx, &env2, body)?;
                 s = compose(&sb, &s);
-                let su = unify(ctx, &apply_subst(&s, &body_ty), &apply_subst(&s, &ret))?;
+                let su = unify(ctx, &apply_subst(&s, &body_ty), &apply_subst(&s, &ret))
+                    .map_err(|e| (e, body.1.clone()))?;
                 s = compose(&su, &s);
             }
 
@@ -619,7 +657,8 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                 let env2 = apply_subst_env(&s, env);
                 let (sb, body_ty) = infer_inner(ctx, &env2, otherwise_body)?;
                 s = compose(&sb, &s);
-                let su = unify(ctx, &apply_subst(&s, &body_ty), &apply_subst(&s, &ret))?;
+                let su = unify(ctx, &apply_subst(&s, &body_ty), &apply_subst(&s, &ret))
+                    .map_err(|e| (e, otherwise_body.1.clone()))?;
                 s = compose(&su, &s);
             }
 
@@ -632,7 +671,8 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
             for elem in elems {
                 let (se, te) = infer_inner(ctx, &apply_subst_env(&s, env), elem)?;
                 s = compose(&se, &s);
-                let su = unify(ctx, &apply_subst(&s, &te), &apply_subst(&s, &elem_ty))?;
+                let su = unify(ctx, &apply_subst(&s, &te), &apply_subst(&s, &elem_ty))
+                    .map_err(|e| (e, elem.1.clone()))?;
                 s = compose(&su, &s);
             }
             Ok((s.clone(), Type::Con("List".into(), vec![apply_subst(&s, &elem_ty)])))
@@ -640,7 +680,7 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
 
         Expr::Import(path) => {
             let ty = crate::module::load_module(path)
-                .map_err(TypeError::ModuleError)?.ty;
+                .map_err(|e| (TypeError::ModuleError(e), span.clone()))?.ty;
             Ok((Subst::new(), ty))
         }
 
@@ -656,7 +696,11 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                         // If this name was previously annotated, enforce the annotation.
                         let s2 = if let Some(existing) = env3.get(name) {
                             let existing_ty = ctx.instantiate(existing);
-                            compose(&unify(ctx, &apply_subst(&s1, &ty), &existing_ty)?, &s1)
+                            compose(
+                                &unify(ctx, &apply_subst(&s1, &ty), &existing_ty)
+                                    .map_err(|e| (e, expr.1.clone()))?,
+                                &s1,
+                            )
                         } else {
                             s1
                         };
@@ -670,7 +714,8 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
                         let env3 = apply_subst_env(&s, &env2);
                         if let Some(existing) = env3.get(name) {
                             let existing_ty = ctx.instantiate(existing);
-                            let s1 = unify(ctx, &existing_ty, &ann_ty)?;
+                            let s1 = unify(ctx, &existing_ty, &ann_ty)
+                                .map_err(|e| (e, span.clone()))?;
                             s = compose(&s1, &s);
                             env2 = apply_subst_env(&s, &env2);
                             let scheme = generalize(&apply_subst_env(&s, &env2), &apply_subst(&s, &ann_ty));
@@ -695,16 +740,18 @@ fn infer_inner(ctx: &mut Ctx, env: &TypeEnv, expr: &Expr) -> Result<(Subst, Type
 /// Normalize a type's variable names (t0,t1,… → a,b,…). Public for REPL display.
 pub fn normalize_ty(ty: Type) -> Type { normalize(ty) }
 
-pub fn infer(env: &TypeEnv, expr: &Expr) -> Result<Type, TypeError> {
+pub fn infer(env: &TypeEnv, expr: &Spanned<Expr>) -> Result<Type, InferError> {
     let mut ctx = Ctx::new();
-    let (s, ty) = infer_inner(&mut ctx, env, expr)?;
+    let (s, ty) = infer_inner(&mut ctx, env, expr)
+        .map_err(|(kind, span)| InferError { kind, span })?;
     Ok(normalize(apply_subst(&s, &ty)))
 }
 
 /// Infer and return the generalised scheme — used by the REPL.
-pub fn infer_scheme(env: &TypeEnv, expr: &Expr) -> Result<Scheme, TypeError> {
+pub fn infer_scheme(env: &TypeEnv, expr: &Spanned<Expr>) -> Result<Scheme, InferError> {
     let mut ctx = Ctx::new();
-    let (s, ty) = infer_inner(&mut ctx, env, expr)?;
+    let (s, ty) = infer_inner(&mut ctx, env, expr)
+        .map_err(|(kind, span)| InferError { kind, span })?;
     let ty = apply_subst(&s, &ty);
     let env2 = apply_subst_env(&s, env);
     Ok(generalize(&env2, &ty))

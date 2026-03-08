@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chumsky::Parser as _;
-use crate::ast::{BlockItem, Expr, Lit};
+use crate::ast::{BlockItem, Expr, Lit, Spanned};
 use crate::parser::file_parser;
 
 // ── Compiler state ────────────────────────────────────────────────────────────
@@ -149,7 +149,8 @@ impl FnBuilder {
 
 // ── Free variable analysis ────────────────────────────────────────────────────
 
-fn free_vars(expr: &Expr, bound: &HashSet<String>) -> HashSet<String> {
+fn free_vars(expr: &Spanned<Expr>, bound: &HashSet<String>) -> HashSet<String> {
+    let (expr, _) = expr;
     match expr {
         Expr::Var(n) => {
             if bound.contains(n) { HashSet::new() } else { [n.clone()].into_iter().collect() }
@@ -235,9 +236,10 @@ fn compile_expr(
     c: &mut Compiler,
     fb: &mut FnBuilder,
     env: &Env,
-    expr: &Expr,
+    expr: &Spanned<Expr>,
     tail: bool,
 ) -> Result<String, String> {
+    let (expr, _) = expr;
     match expr {
         Expr::Lit(Lit::Int(n)) => {
             let r = c.ssa("int");
@@ -277,7 +279,7 @@ fn compile_expr(
                     BlockItem::MonadicBind(_, _) => unreachable!(),
                 }
             }
-            compile_expr(c, fb, &env2, body, tail)
+            compile_expr(c, fb, &env2, body.as_ref(), tail)
         }
 
         Expr::Record(fields) => {
@@ -302,7 +304,7 @@ fn compile_expr(
         Expr::Tag(name, payload) => {
             let name_g = c.string_const(name);
             let payload_ssa = match payload {
-                Some(e) => compile_expr(c, fb, env, e, false)?,
+                Some(e) => compile_expr(c, fb, env, e.as_ref(), false)?,
                 None => {
                     let r = c.ssa("unit");
                     fb.emit(format!("{} = call ptr @coda_mk_unit()", r));
@@ -389,7 +391,7 @@ fn compile_lam(
     fb: &mut FnBuilder,
     env: &Env,
     params: &[String],
-    body: &Expr,
+    body: &Spanned<Expr>,
 ) -> Result<String, String> {
     // Compute free variables: used in body but not bound by params, filtered to what's in env.
     let param_set: HashSet<String> = params.iter().cloned().collect();
@@ -469,9 +471,9 @@ fn compile_when(
     c: &mut Compiler,
     fb: &mut FnBuilder,
     env: &Env,
-    scrutinee: &Expr,
-    branches: &[(String, Option<String>, Box<Expr>)],
-    otherwise: &Option<Box<Expr>>,
+    scrutinee: &Spanned<Expr>,
+    branches: &[(String, Option<String>, Box<Spanned<Expr>>)],
+    otherwise: &Option<Box<Spanned<Expr>>>,
     tail: bool,
 ) -> Result<String, String> {
     let scrut = compile_expr(c, fb, env, scrutinee, false)?;
@@ -997,7 +999,7 @@ fn builtin_fn(name: &str) -> Option<&'static str> {
 
 /// Compile a Coda AST expression to LLVM IR text.
 /// Returns the complete `.ll` file content.
-pub fn compile(expr: &Expr, is_task: bool) -> Result<String, String> {
+pub fn compile(expr: &Spanned<Expr>, is_task: bool) -> Result<String, String> {
     let mut c = Compiler::new();
     let mut fb = FnBuilder::new();
 

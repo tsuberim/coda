@@ -2,32 +2,83 @@ use chumsky::{text::TextParser, Parser};
 use lang::ast::*;
 use lang::parser::{expr_parser, file_parser};
 
+fn d() -> Span { 0..0 }
+
+/// Strip spans from a `Spanned<Expr>` recursively so tests can compare structure only.
+/// All spans are replaced with `0..0` (dummy) so comparisons are span-agnostic.
+fn strip(se: Spanned<Expr>) -> Spanned<Expr> {
+    let e = match se.0 {
+        Expr::Var(n) => Expr::Var(n),
+        Expr::Lit(l) => Expr::Lit(l),
+        Expr::Import(p) => Expr::Import(p),
+        Expr::Lam(params, body) => Expr::Lam(params, Box::new(strip(*body))),
+        Expr::App(f, args) => Expr::App(
+            Box::new(strip(*f)),
+            args.into_iter().map(strip).collect(),
+        ),
+        Expr::Block(items, body) => Expr::Block(
+            items.into_iter().map(strip_item).collect(),
+            Box::new(strip(*body)),
+        ),
+        Expr::Record(fields) => Expr::Record(
+            fields.into_iter().map(|(k, v)| (k, strip(v))).collect(),
+        ),
+        Expr::Field(e, name) => Expr::Field(Box::new(strip(*e)), name),
+        Expr::Tag(name, payload) => Expr::Tag(name, payload.map(|p| Box::new(strip(*p)))),
+        Expr::When(scrut, branches, otherwise) => Expr::When(
+            Box::new(strip(*scrut)),
+            branches.into_iter().map(|(tag, binding, body)| (tag, binding, Box::new(strip(*body)))).collect(),
+            otherwise.map(|o| Box::new(strip(*o))),
+        ),
+        Expr::List(elems) => Expr::List(elems.into_iter().map(strip).collect()),
+    };
+    (e, d())
+}
+
+fn strip_item(item: BlockItem) -> BlockItem {
+    match item {
+        BlockItem::Bind(name, e) => BlockItem::Bind(name, strip(e)),
+        BlockItem::Ann(name, te) => BlockItem::Ann(name, te),
+        BlockItem::MonadicBind(name, e) => BlockItem::MonadicBind(name, strip(e)),
+    }
+}
+
 fn parse_expr(src: &str) -> Expr {
-    expr_parser()
+    let spanned = expr_parser()
         .padded()
         .then_ignore(chumsky::primitive::end())
         .parse(src)
-        .unwrap_or_else(|errs| panic!("parse failed for {:?}: {:?}", src, errs))
+        .unwrap_or_else(|errs| panic!("parse failed for {:?}: {:?}", src, errs));
+    strip(spanned).0
 }
 
 fn parse_file(src: &str) -> Expr {
-    file_parser()
+    let spanned = file_parser()
         .parse(src)
-        .unwrap_or_else(|errs| panic!("parse failed for {:?}: {:?}", src, errs))
+        .unwrap_or_else(|errs| panic!("parse failed for {:?}: {:?}", src, errs));
+    strip(spanned).0
 }
+
+// Helper constructors producing span-free Expr values for comparison.
+// Spans are 0..0 (dummy) since we strip them in parse_expr/parse_file.
 
 fn var(s: &str) -> Expr { Expr::Var(s.into()) }
 fn int(n: i64) -> Expr { Expr::Lit(Lit::Int(n)) }
 fn str_(s: &str) -> Expr { Expr::Lit(Lit::Str(s.into())) }
-fn app(f: Expr, args: Vec<Expr>) -> Expr { Expr::App(Box::new(f), args) }
+fn app(f: Expr, args: Vec<Expr>) -> Expr {
+    Expr::App(
+        Box::new((f, d())),
+        args.into_iter().map(|a| (a, d())).collect(),
+    )
+}
 fn lam(params: Vec<&str>, body: Expr) -> Expr {
-    Expr::Lam(params.iter().map(|s| s.to_string()).collect(), Box::new(body))
+    Expr::Lam(params.iter().map(|s| s.to_string()).collect(), Box::new((body, d())))
 }
 fn block(bindings: Vec<(&str, Expr)>, body: Expr) -> Expr {
     use lang::ast::BlockItem;
     Expr::Block(
-        bindings.into_iter().map(|(k, v)| BlockItem::Bind(k.into(), v)).collect(),
-        Box::new(body),
+        bindings.into_iter().map(|(k, v)| BlockItem::Bind(k.into(), (v, d()))).collect(),
+        Box::new((body, d())),
     )
 }
 

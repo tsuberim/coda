@@ -17,7 +17,7 @@ fn infer_err(src: &str) -> TypeError {
     let ast = file_parser()
         .parse(src)
         .unwrap_or_else(|e| panic!("parse error in {:?}: {:?}", src, e));
-    infer(&std_type_env(), &ast).expect_err("expected type error")
+    infer(&std_type_env(), &ast).expect_err("expected type error").kind
 }
 
 fn con(s: &str) -> Type { Type::Con(s.into(), vec![]) }
