@@ -262,13 +262,13 @@ pub enum TypeError {
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeError::UnificationFail(a, b) => write!(f, "cannot unify {} with {}", a, b),
-            TypeError::InfiniteType(v, t) => write!(f, "infinite type: {} ~ {}", v, t),
-            TypeError::UnboundVar(n) => write!(f, "unbound variable: {}", n),
-            TypeError::NotARecord(t) => write!(f, "expected record, got {}", t),
-            TypeError::NoSuchField(name, t) => write!(f, "no field `{}` in {}", name, t),
-            TypeError::NotAUnion(t) => write!(f, "expected union, got {}", t),
-            TypeError::DeadOtherwise => write!(f, "dead `otherwise`: scrutinee is a closed union"),
+            TypeError::UnificationFail(a, b) => write!(f, "type mismatch: expected `{}`, got `{}`", a, b),
+            TypeError::InfiniteType(v, t) => write!(f, "recursive type: `{}` expands to `{}`", v, t),
+            TypeError::UnboundVar(n) => write!(f, "unknown variable `{}`", n),
+            TypeError::NotARecord(t) => write!(f, "not a record — has type `{}`", t),
+            TypeError::NoSuchField(name, t) => write!(f, "no field `{}` on `{}`", name, t),
+            TypeError::NotAUnion(t) => write!(f, "not a tagged union — has type `{}`", t),
+            TypeError::DeadOtherwise => write!(f, "`otherwise` is unreachable: all tags already handled"),
             TypeError::ModuleError(msg) => write!(f, "module error: {}", msg),
         }
     }
@@ -290,7 +290,7 @@ impl fmt::Display for InferError {
 
 impl InferError {
     pub fn render(&self, filename: &str, src: &str) -> String {
-        use ariadne::{CharSet, Color, Config, Label, Report, ReportKind, sources};
+        use ariadne::{Color, Label, Report, ReportKind, sources};
         let mut out = Vec::<u8>::new();
         let span = (filename.to_string(), self.span.clone());
         Report::build(ReportKind::Error, span.clone())
@@ -300,7 +300,6 @@ impl InferError {
                     .with_message(self.kind.to_string())
                     .with_color(Color::Red),
             )
-            .with_config(Config::new().with_char_set(CharSet::Ascii))
             .finish()
             .write(sources([(filename.to_string(), src.to_string())]), &mut out)
             .unwrap_or(());
