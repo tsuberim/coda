@@ -46,6 +46,10 @@ Spans added to every `Expr` node (`Spanned<T> = (T, Range<usize>)`). `infer_inne
 
 `Tensor(elem, dims)` where `dims` is a type-level shape, e.g. `Tensor(Float, [3, 4])`. Dimensions tracked as phantom nat literals in the type system — mismatched shapes are caught at compile time, not runtime. Operations like `matmul` carry dimension constraints (`[m, k] × [k, n] → [m, n]`) enforced by unification. Requires extending HM with a lightweight kind for nat literals.
 
-## 12. GPU acceleration
+## 12. Multi-threading
+
+Spawn parallel tasks with `parallel : List(Task a e) -> Task (List a) e`. Pure, immutable values are safe to share across threads with no locks — RC is the only hazard, replaced with atomic RC for shared values. The runtime manages a thread pool; the type system ensures no mutable state crosses thread boundaries. Builds naturally on the `Task` monad: threads are just concurrent effects.
+
+## 13. GPU acceleration
 
 Lower `Tensor` operations to GPU kernels. Pure tensor expressions are effect-free and trivially parallelisable — the compiler schedules them onto the GPU automatically. `gpu_map`, `gpu_matmul`, and friends emit LLVM NVPTX/AMDGPU IR or call into a runtime that dispatches via Metal/CUDA/WebGPU. Wrapped in `Task` where data transfer is involved.
