@@ -5,6 +5,16 @@ permalink: /
 
 A purely functional, Hindley-Milner typed language that feels like a scripting language.
 Types are always inferred — you never have to write them.
+Programs compile to native binaries via LLVM.
+
+## Usage
+
+```sh
+coda                        # interactive REPL
+coda file.coda              # interpret a file
+coda -c file.coda           # compile to native binary (requires clang)
+coda -c file.coda -o out    # compile with custom output path
+```
 
 ## Syntax
 

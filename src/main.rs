@@ -285,8 +285,8 @@ fn compile(path: PathBuf, output: Option<PathBuf>) {
         Ok(ir) => ir,
         Err(e) => { eprintln!("codegen error: {e}"); std::process::exit(1); }
     };
-    // Write IR to temp file, then compile with clang.
-    let ir_path = out.with_extension("ll");
+    // Write IR to a temp file, compile with clang, then clean up.
+    let ir_path = std::env::temp_dir().join(format!("coda_{}.ll", std::process::id()));
     std::fs::write(&ir_path, &ir).unwrap_or_else(|e| {
         eprintln!("failed to write IR: {e}"); std::process::exit(1);
     });
@@ -300,6 +300,7 @@ fn compile(path: PathBuf, output: Option<PathBuf>) {
         ])
         .status()
         .unwrap_or_else(|e| { eprintln!("clang failed: {e}"); std::process::exit(1); });
+    std::fs::remove_file(&ir_path).ok();
     if !status.success() {
         eprintln!("clang exited with {}", status);
         std::process::exit(1);
