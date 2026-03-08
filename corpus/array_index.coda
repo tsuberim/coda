@@ -1,0 +1,3 @@
+-- Indexing reduces rank by one.
+[10, 20, 30][1]
+-- => 20

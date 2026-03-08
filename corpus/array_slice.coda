@@ -1,0 +1,3 @@
+-- Slice with literal bounds produces a new array.
+[10, 20, 30, 40, 50][1:3]
+-- => [20, 30]
