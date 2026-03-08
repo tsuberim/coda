@@ -38,18 +38,22 @@ Spans added to every `Expr` node (`Spanned<T> = (T, Range<usize>)`). `infer_inne
 
 `42.0`, `+.`, `-.`, `*.`, `/.`. Separate from `Int` — no implicit coercion. Adds `Float` to the runtime value tag and type system.
 
-## 10. Mutable references (optional)
+## 10. Numeric precision types
+
+Full set of native numeric primitives: `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`. Current `Int` and `Float` become aliases for `I64` and `F64`. No implicit coercion between widths — explicit `to_f64`, `to_i32`, etc. LLVM already has native support for all of these; the main work is in the type system and runtime value tag. Prerequisite for tensors and GPU.
+
+## 11. Mutable references (optional)
 
 `Ref(a)` — `new_ref(v)`, `read_ref(r)`, `write_ref(r, v)`. Breaks pure semantics but needed for efficient imperative algorithms. Wrap in `Task` to keep effects explicit: `write_ref : Ref a -> a -> Task {} []`.
 
-## 11. Tensor types with dimension checking
+## 12. Tensor types with dimension checking
 
 `Tensor(elem, dims)` where `dims` is a type-level shape, e.g. `Tensor(Float, [3, 4])`. Dimensions tracked as phantom nat literals in the type system — mismatched shapes are caught at compile time, not runtime. Operations like `matmul` carry dimension constraints (`[m, k] × [k, n] → [m, n]`) enforced by unification. Requires extending HM with a lightweight kind for nat literals.
 
-## 12. Multi-threading
+## 13. Multi-threading
 
 Spawn parallel tasks with `parallel : List(Task a e) -> Task (List a) e`. Pure, immutable values are safe to share across threads with no locks — RC is the only hazard, replaced with atomic RC for shared values. The runtime manages a thread pool; the type system ensures no mutable state crosses thread boundaries. Builds naturally on the `Task` monad: threads are just concurrent effects.
 
-## 13. GPU acceleration
+## 14. GPU acceleration
 
 Lower `Tensor` operations to GPU kernels. Pure tensor expressions are effect-free and trivially parallelisable — the compiler schedules them onto the GPU automatically. `gpu_map`, `gpu_matmul`, and friends emit LLVM NVPTX/AMDGPU IR or call into a runtime that dispatches via Metal/CUDA/WebGPU. Wrapped in `Task` where data transfer is involved.
