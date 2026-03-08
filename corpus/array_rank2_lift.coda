@@ -1,0 +1,4 @@
+-- Scalar function lifted over a rank-2 array.
+f = \x -> x * x
+f([[1, 2], [3, 4]])
+-- => Int[2x2]([1, 4, 9, 16])

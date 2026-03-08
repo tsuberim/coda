@@ -1,0 +1,3 @@
+-- Element-wise add of two rank-2 arrays.
+[[1, 2], [3, 4]] + [[10, 20], [30, 40]]
+-- => Int[2x2]([11, 22, 33, 44])

@@ -1,0 +1,4 @@
+-- Squaring function lifted over array.
+f = \x -> x * x
+f([1, 2, 3])
+-- => [1, 4, 9]
