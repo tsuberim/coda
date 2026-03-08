@@ -16,6 +16,7 @@ typedef CodaVal* (*CodaFn)(CodaVal**, CodaVal**, int32_t);
 
 struct CodaVal {
     CodaKind kind;
+    int32_t rc;
     union {
         int64_t int_val;
         char *str_val;
@@ -56,6 +57,9 @@ CodaVal* coda_map(CodaVal *f, CodaVal *xs);
 CodaVal* coda_fold(CodaVal *f, CodaVal *init, CodaVal *xs);
 CodaVal* coda_list_of(CodaVal *n, CodaVal *v);
 CodaVal* coda_list_init(CodaVal *n, CodaVal *f);
+
+void coda_retain(CodaVal *v);
+void coda_release(CodaVal *v);
 
 void coda_print_val(CodaVal *v);
 CodaVal* coda_main(void);

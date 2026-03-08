@@ -7,7 +7,47 @@ static CodaVal* alloc_val(CodaKind kind) {
     CodaVal *v = malloc(sizeof(CodaVal));
     if (!v) { fprintf(stderr, "oom\n"); exit(1); }
     v->kind = kind;
+    v->rc = 1;
     return v;
+}
+
+void coda_retain(CodaVal *v) {
+    if (v) v->rc++;
+}
+
+static void drop_children(CodaVal *v);
+
+void coda_release(CodaVal *v) {
+    if (!v) return;
+    if (--v->rc > 0) return;
+    drop_children(v);
+    free(v);
+}
+
+static void drop_children(CodaVal *v) {
+    switch (v->kind) {
+        case CODA_STR: free(v->str_val); break;
+        case CODA_CLOSURE:
+            for (int i = 0; i < v->closure.ncaps; i++)
+                coda_release(v->closure.caps[i]);
+            free(v->closure.caps);
+            break;
+        case CODA_TAG:
+            coda_release(v->tag.payload);
+            break;
+        case CODA_RECORD:
+            for (int i = 0; i < v->record.nfields; i++)
+                coda_release(v->record.vals[i]);
+            free(v->record.keys);
+            free(v->record.vals);
+            break;
+        case CODA_LIST:
+            for (int i = 0; i < v->list.len; i++)
+                coda_release(v->list.items[i]);
+            free(v->list.items);
+            break;
+        default: break;
+    }
 }
 
 CodaVal* coda_mk_int(int64_t n) {
@@ -29,6 +69,7 @@ CodaVal* coda_mk_closure(CodaFn fn, CodaVal **caps, int32_t ncaps) {
     if (ncaps > 0 && caps) {
         v->closure.caps = malloc(ncaps * sizeof(CodaVal*));
         memcpy(v->closure.caps, caps, ncaps * sizeof(CodaVal*));
+        for (int i = 0; i < ncaps; i++) coda_retain(caps[i]);
     } else {
         v->closure.caps = NULL;
     }
@@ -38,6 +79,7 @@ CodaVal* coda_mk_closure(CodaFn fn, CodaVal **caps, int32_t ncaps) {
 CodaVal* coda_mk_tag(const char *name, CodaVal *payload) {
     CodaVal *v = alloc_val(CODA_TAG);
     v->tag.name = name;
+    coda_retain(payload);
     v->tag.payload = payload;
     return v;
 }
@@ -54,6 +96,7 @@ CodaVal* coda_mk_record(const char **keys, CodaVal **vals, int32_t nfields) {
         v->record.vals = malloc(nfields * sizeof(CodaVal*));
         memcpy(v->record.keys, keys, nfields * sizeof(char*));
         memcpy(v->record.vals, vals, nfields * sizeof(CodaVal*));
+        for (int i = 0; i < nfields; i++) coda_retain(vals[i]);
     } else {
         v->record.keys = NULL;
         v->record.vals = NULL;
@@ -67,6 +110,7 @@ CodaVal* coda_mk_list(CodaVal **items, int32_t len) {
     if (len > 0 && items) {
         v->list.items = malloc(len * sizeof(CodaVal*));
         memcpy(v->list.items, items, len * sizeof(CodaVal*));
+        for (int i = 0; i < len; i++) coda_retain(items[i]);
     } else {
         v->list.items = NULL;
     }
@@ -164,7 +208,10 @@ static int val_eq(CodaVal *a, CodaVal *b) {
 }
 
 CodaVal* coda_eq(CodaVal *a, CodaVal *b) {
-    return coda_mk_tag(val_eq(a, b) ? "True" : "False", coda_mk_unit());
+    CodaVal *unit = coda_mk_unit();
+    CodaVal *tag = coda_mk_tag(val_eq(a, b) ? "True" : "False", unit);
+    coda_release(unit);
+    return tag;
 }
 
 static CodaVal* fix_shim(CodaVal **caps, CodaVal **args, int32_t nargs) {
@@ -187,6 +234,8 @@ CodaVal* coda_cons(CodaVal *x, CodaVal *xs) {
     CodaVal *v = alloc_val(CODA_LIST);
     v->list.items = items;
     v->list.len = n + 1;
+    // Retain all items stored in the new list
+    for (int i = 0; i < n + 1; i++) coda_retain(items[i]);
     return v;
 }
 
@@ -195,26 +244,42 @@ CodaVal* coda_append(CodaVal *xs, CodaVal *ys) {
         fprintf(stderr, "runtime error: <>: not a list\n"); exit(1);
     }
     int32_t nx = xs->list.len, ny = ys->list.len;
-    CodaVal **items = malloc((nx + ny) * sizeof(CodaVal*));
+    int32_t total = nx + ny;
+    CodaVal **items = malloc(total * sizeof(CodaVal*));
     if (nx > 0) memcpy(items, xs->list.items, nx * sizeof(CodaVal*));
     if (ny > 0) memcpy(items + nx, ys->list.items, ny * sizeof(CodaVal*));
     CodaVal *v = alloc_val(CODA_LIST);
     v->list.items = items;
-    v->list.len = nx + ny;
+    v->list.len = total;
+    // Retain all items stored in the new list
+    for (int i = 0; i < total; i++) coda_retain(items[i]);
     return v;
 }
 
 CodaVal* coda_head(CodaVal *xs) {
     if (xs->kind != CODA_LIST) { fprintf(stderr, "runtime error: head: not a list\n"); exit(1); }
-    if (xs->list.len == 0) return coda_mk_tag("None", coda_mk_unit());
+    if (xs->list.len == 0) {
+        CodaVal *unit = coda_mk_unit();
+        CodaVal *tag = coda_mk_tag("None", unit);
+        coda_release(unit);
+        return tag;
+    }
     return coda_mk_tag("Some", xs->list.items[0]);
 }
 
 CodaVal* coda_tail(CodaVal *xs) {
     if (xs->kind != CODA_LIST) { fprintf(stderr, "runtime error: tail: not a list\n"); exit(1); }
-    if (xs->list.len == 0) return coda_mk_tag("None", coda_mk_unit());
+    if (xs->list.len == 0) {
+        CodaVal *unit = coda_mk_unit();
+        CodaVal *tag = coda_mk_tag("None", unit);
+        coda_release(unit);
+        return tag;
+    }
     int32_t n = xs->list.len - 1;
-    return coda_mk_tag("Some", coda_mk_list(xs->list.items + 1, n));
+    CodaVal *tail_list = coda_mk_list(xs->list.items + 1, n);
+    CodaVal *tag = coda_mk_tag("Some", tail_list);
+    coda_release(tail_list);
+    return tag;
 }
 
 CodaVal* coda_len(CodaVal *xs) {
@@ -228,7 +293,11 @@ CodaVal* coda_map(CodaVal *f, CodaVal *xs) {
     CodaVal **items = malloc(n * sizeof(CodaVal*));
     for (int i = 0; i < n; i++)
         items[i] = coda_apply(f, &xs->list.items[i], 1);
-    return coda_mk_list(items, n);
+    CodaVal *result = coda_mk_list(items, n);
+    // coda_mk_list retains all items; release our refs (rc=1 from coda_apply)
+    for (int i = 0; i < n; i++) coda_release(items[i]);
+    free(items);
+    return result;
 }
 
 CodaVal* coda_fold(CodaVal *f, CodaVal *init, CodaVal *xs) {
@@ -245,7 +314,9 @@ CodaVal* coda_list_of(CodaVal *n_val, CodaVal *v) {
     int32_t n = (int32_t)n_val->int_val;
     CodaVal **items = malloc(n * sizeof(CodaVal*));
     for (int i = 0; i < n; i++) items[i] = v;
-    return coda_mk_list(items, n);
+    CodaVal *result = coda_mk_list(items, n);
+    free(items);
+    return result;
 }
 
 CodaVal* coda_list_init(CodaVal *n_val, CodaVal *f) {
@@ -254,8 +325,13 @@ CodaVal* coda_list_init(CodaVal *n_val, CodaVal *f) {
     for (int i = 0; i < n; i++) {
         CodaVal *idx = coda_mk_int(i);
         items[i] = coda_apply(f, &idx, 1);
+        coda_release(idx); // idx was only needed for the apply call
     }
-    return coda_mk_list(items, n);
+    CodaVal *result = coda_mk_list(items, n);
+    // coda_mk_list retains all items; release our refs (rc=1 from coda_apply)
+    for (int i = 0; i < n; i++) coda_release(items[i]);
+    free(items);
+    return result;
 }
 
 static void print_inner(CodaVal *v) {

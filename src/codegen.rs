@@ -48,11 +48,17 @@ struct FnBuilder {
     done: Vec<(String, Vec<String>)>, // finished blocks
     cur_label: String,
     cur_instrs: Vec<String>,
+    owned: HashSet<String>,
 }
 
 impl FnBuilder {
     fn new() -> Self {
-        FnBuilder { done: Vec::new(), cur_label: "entry".into(), cur_instrs: Vec::new() }
+        FnBuilder {
+            done: Vec::new(),
+            cur_label: "entry".into(),
+            cur_instrs: Vec::new(),
+            owned: HashSet::new(),
+        }
     }
 
     fn cur_label(&self) -> &str {
@@ -68,6 +74,7 @@ impl FnBuilder {
         let old_instrs = std::mem::take(&mut self.cur_instrs);
         let old_label = std::mem::replace(&mut self.cur_label, label.into());
         self.done.push((old_label, old_instrs));
+        self.owned = HashSet::new();
     }
 
     fn emit_br(&mut self, label: &str) {
@@ -80,6 +87,38 @@ impl FnBuilder {
 
     fn emit_ret(&mut self, val: &str) {
         self.emit(format!("ret ptr {}", val));
+    }
+
+    fn own(&mut self, ssa: &str) {
+        self.owned.insert(ssa.to_string());
+    }
+
+    fn is_owned(&self, ssa: &str) -> bool {
+        self.owned.contains(ssa)
+    }
+
+    fn release_if_owned(&mut self, ssa: &str) {
+        if self.owned.remove(ssa) {
+            self.emit(format!("call void @coda_release(ptr {})", ssa));
+        }
+    }
+
+    /// Ensure we own `export` (retain if borrowed), release all other owned values,
+    /// then disown `export` (transferring ownership out).
+    fn prepare_export(&mut self, export: &str) {
+        if !self.owned.contains(export) {
+            self.emit(format!("call void @coda_retain(ptr {})", export));
+            self.owned.insert(export.to_string());
+        }
+        let to_release: Vec<String> = self.owned.iter()
+            .filter(|v| v.as_str() != export)
+            .cloned()
+            .collect();
+        for v in &to_release {
+            self.emit(format!("call void @coda_release(ptr {})", v));
+        }
+        self.owned = HashSet::new();
+        // export is transferred, not in owned anymore
     }
 
     fn to_ir(mut self) -> String {
@@ -166,6 +205,7 @@ fn compile_expr(
         Expr::Lit(Lit::Int(n)) => {
             let r = c.ssa("int");
             fb.emit(format!("{} = call ptr @coda_mk_int(i64 {})", r, n));
+            fb.own(&r);
             Ok(r)
         }
 
@@ -173,6 +213,7 @@ fn compile_expr(
             let g = c.string_const(s);
             let r = c.ssa("str");
             fb.emit(format!("{} = call ptr @coda_mk_str(ptr {})", r, g));
+            fb.own(&r);
             Ok(r)
         }
 
@@ -217,6 +258,7 @@ fn compile_expr(
             let field_g = c.string_const(field);
             let r = c.ssa("field");
             fb.emit(format!("{} = call ptr @coda_field_get(ptr {}, ptr {})", r, rec_ssa, field_g));
+            // result is BORROWED from the record — do NOT own it
             Ok(r)
         }
 
@@ -227,11 +269,15 @@ fn compile_expr(
                 None => {
                     let r = c.ssa("unit");
                     fb.emit(format!("{} = call ptr @coda_mk_unit()", r));
+                    fb.own(&r);
                     r
                 }
             };
             let r = c.ssa("tag");
             fb.emit(format!("{} = call ptr @coda_mk_tag(ptr {}, ptr {})", r, name_g, payload_ssa));
+            fb.own(&r);
+            // mk_tag retained payload; release our local ref
+            fb.release_if_owned(&payload_ssa);
             Ok(r)
         }
 
@@ -268,7 +314,7 @@ fn compile_lam(
     let mut lam_fb = FnBuilder::new();
     let mut lam_env: Env = HashMap::new();
 
-    // Load each capture from %caps.
+    // Load each capture from %caps — borrowed, do NOT retain or own.
     for (i, fv) in fvs.iter().enumerate() {
         let p = format!("%cp_{}", i);
         let ssa = format!("%cap_{}", i);
@@ -277,16 +323,19 @@ fn compile_lam(
         lam_env.insert(fv.clone(), ssa);
     }
 
-    // Load each param from %args.
+    // Load each param from %args — retain and own them.
     for (i, param) in params.iter().enumerate() {
         let p = format!("%ap_{}", i);
         let ssa = format!("%arg_{}", i);
         lam_fb.emit(format!("{} = getelementptr ptr, ptr %args, i32 {}", p, i));
         lam_fb.emit(format!("{} = load ptr, ptr {}", ssa, p));
+        lam_fb.emit(format!("call void @coda_retain(ptr {})", ssa));
+        lam_fb.own(&ssa);
         lam_env.insert(param.clone(), ssa);
     }
 
     let result = compile_expr(c, &mut lam_fb, &lam_env, body)?;
+    lam_fb.prepare_export(&result);
     lam_fb.emit_ret(&result);
 
     let body_ir = lam_fb.to_ir();
@@ -318,7 +367,12 @@ fn compile_lam(
             "{} = call ptr @coda_mk_closure(ptr @{}, ptr {}, i32 {})",
             r, lam_name, caps_arr, n
         ));
+        // Closure retains each cap; release our local ref for each cap that we own
+        for fv in &fvs {
+            fb.release_if_owned(&env[fv]);
+        }
     }
+    fb.own(&r);
     Ok(r)
 }
 
@@ -331,6 +385,12 @@ fn compile_when(
     otherwise: &Option<Box<Expr>>,
 ) -> Result<String, String> {
     let scrut = compile_expr(c, fb, env, scrutinee)?;
+    let scrut_was_owned = fb.is_owned(&scrut);
+    // Remove scrutinee from owned set — we'll release it manually at the merge block
+    if scrut_was_owned {
+        fb.owned.remove(&scrut);
+    }
+
     let tn = c.ssa("tn");
     fb.emit(format!("{} = call ptr @coda_tag_name(ptr {})", tn, scrut));
 
@@ -381,8 +441,9 @@ fn compile_when(
             fb.emit(format!("{} = call ptr @coda_tag_payload(ptr {})", p, scrut));
             env2.insert(b.clone(), p);
         }
-        let result = compile_expr(c, fb, &env2, body)?;
+        let result = compile_expr(c, fb, &mut env2, body)?;
         let from = fb.cur_label().to_string();
+        fb.prepare_export(&result);
         phi_entries.push((result, from));
         fb.emit_br(&merge);
 
@@ -405,9 +466,11 @@ fn compile_when(
 
     // Otherwise block.
     if let Some(body) = otherwise {
-        fb.next_block(otherwise_label.unwrap());
+        let ol = otherwise_label.clone().unwrap();
+        fb.next_block(ol);
         let result = compile_expr(c, fb, env, body)?;
         let from = fb.cur_label().to_string();
+        fb.prepare_export(&result);
         phi_entries.push((result, from));
         fb.emit_br(&merge);
     }
@@ -423,6 +486,7 @@ fn compile_when(
     let r = c.ssa("when");
     if phi_entries.is_empty() {
         fb.emit(format!("{} = call ptr @coda_mk_unit()", r));
+        fb.own(&r);
     } else {
         let phi_args = phi_entries
             .iter()
@@ -430,7 +494,14 @@ fn compile_when(
             .collect::<Vec<_>>()
             .join(", ");
         fb.emit(format!("{} = phi ptr {}", r, phi_args));
+        fb.own(&r);
     }
+
+    // Release the scrutinee now that all branches are done
+    if scrut_was_owned {
+        fb.emit(format!("call void @coda_release(ptr {})", scrut));
+    }
+
     Ok(r)
 }
 
@@ -457,6 +528,7 @@ fn emit_apply(
         }
         fb.emit(format!("{} = call ptr @coda_apply(ptr {}, ptr {}, i32 {})", r, f_ssa, arr, n));
     }
+    fb.own(&r);
     Ok(r)
 }
 
@@ -470,6 +542,7 @@ fn emit_record(
     let n = key_gs.len();
     if n == 0 {
         fb.emit(format!("{} = call ptr @coda_mk_unit()", r));
+        fb.own(&r);
         return Ok(r);
     }
     let karr = c.ssa("karr");
@@ -494,6 +567,12 @@ fn emit_record(
         "{} = call ptr @coda_mk_record(ptr {}, ptr {}, i32 {})",
         r, karr, varr, n
     ));
+    fb.own(&r);
+    // mk_record retains each val; release our local refs
+    let val_ssas_owned: Vec<String> = val_ssas.to_vec();
+    for vs in &val_ssas_owned {
+        fb.release_if_owned(vs);
+    }
     Ok(r)
 }
 
@@ -506,6 +585,7 @@ fn emit_list(
     let n = elem_ssas.len();
     if n == 0 {
         fb.emit(format!("{} = call ptr @coda_mk_list(ptr null, i32 0)", r));
+        fb.own(&r);
         return Ok(r);
     }
     let arr = c.ssa("larr");
@@ -519,6 +599,12 @@ fn emit_list(
         fb.emit(format!("store ptr {}, ptr {}", es, gep));
     }
     fb.emit(format!("{} = call ptr @coda_mk_list(ptr {}, i32 {})", r, arr, n));
+    fb.own(&r);
+    // mk_list retains each elem; release our local refs
+    let elem_ssas_owned: Vec<String> = elem_ssas.to_vec();
+    for es in &elem_ssas_owned {
+        fb.release_if_owned(es);
+    }
     Ok(r)
 }
 
@@ -552,6 +638,8 @@ declare ptr @coda_map(ptr, ptr)
 declare ptr @coda_fold(ptr, ptr, ptr)
 declare ptr @coda_list_of(ptr, ptr)
 declare ptr @coda_list_init(ptr, ptr)
+declare void @coda_retain(ptr)
+declare void @coda_release(ptr)
 "#;
 
 const BUILTIN_WRAPPERS: &str = r#"; Builtin wrapper functions (closure-callable wrappers around C runtime fns)
@@ -769,12 +857,14 @@ pub fn compile(expr: &Expr) -> Result<String, String> {
                 "{} = call ptr @coda_mk_closure(ptr @{}, ptr null, i32 0)",
                 ssa, fn_name
             ));
+            fb.own(&ssa);
             env.insert(name.to_string(), ssa);
         }
     }
 
     // Compile the program body.
     let result = compile_expr(&mut c, &mut fb, &env, expr)?;
+    fb.prepare_export(&result);
     fb.emit_ret(&result);
 
     let main_body = fb.to_ir();
