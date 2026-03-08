@@ -67,6 +67,9 @@ static void drop_children(CodaVal *v) {
                 coda_release(v->list.items[i]);
             free(v->list.items);
             break;
+        case CODA_TENSOR:
+            free(v->tensor.data);
+            break;
         default: break;
     }
 }
@@ -75,6 +78,134 @@ CodaVal* coda_mk_int(int64_t n) {
     CodaVal *v = alloc_val(CODA_INT);
     v->int_val = n;
     return v;
+}
+
+int64_t coda_unbox_int(CodaVal *v) {
+    if (!v || v->kind != CODA_INT) {
+        fprintf(stderr, "runtime error: unbox_int: not an int\n"); exit(1);
+    }
+    return v->int_val;
+}
+
+CodaVal* coda_mk_float(double f) {
+    CodaVal *v = alloc_val(CODA_FLOAT);
+    v->float_val = f;
+    return v;
+}
+
+double coda_unbox_float(CodaVal *v) {
+    if (!v || v->kind != CODA_FLOAT) {
+        fprintf(stderr, "runtime error: unbox_float: not a float\n"); exit(1);
+    }
+    return v->float_val;
+}
+
+CodaVal* coda_mk_tensor(int64_t rows, int64_t cols) {
+    CodaVal *v = alloc_val(CODA_TENSOR);
+    v->tensor.rows = rows;
+    v->tensor.cols = cols;
+    int64_t size = rows * cols;
+    v->tensor.data = calloc(size, sizeof(double));
+    if (!v->tensor.data) { fprintf(stderr, "oom\n"); exit(1); }
+    return v;
+}
+
+CodaVal* coda_mk_tensor_ones(int64_t rows, int64_t cols) {
+    CodaVal *v = coda_mk_tensor(rows, cols);
+    int64_t size = rows * cols;
+    for (int64_t i = 0; i < size; i++) v->tensor.data[i] = 1.0;
+    return v;
+}
+
+CodaVal* coda_tensor_get(CodaVal *t, int64_t i, int64_t j) {
+    if (!t || t->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: tensor_get: not a tensor\n"); exit(1);
+    }
+    return coda_mk_float(t->tensor.data[i * t->tensor.cols + j]);
+}
+
+CodaVal* coda_tensor_set(CodaVal *t, int64_t i, int64_t j, CodaVal *val) {
+    if (!t || t->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: tensor_set: not a tensor\n"); exit(1);
+    }
+    if (!val || val->kind != CODA_FLOAT) {
+        fprintf(stderr, "runtime error: tensor_set: value not a float\n"); exit(1);
+    }
+    CodaVal *out = coda_mk_tensor(t->tensor.rows, t->tensor.cols);
+    int64_t size = t->tensor.rows * t->tensor.cols;
+    memcpy(out->tensor.data, t->tensor.data, size * sizeof(double));
+    out->tensor.data[i * t->tensor.cols + j] = val->float_val;
+    return out;
+}
+
+CodaVal* coda_tensor_matmul(CodaVal *a, CodaVal *b) {
+    if (!a || a->kind != CODA_TENSOR || !b || b->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: matmul: not a tensor\n"); exit(1);
+    }
+    int64_t m = a->tensor.rows, k = a->tensor.cols, n = b->tensor.cols;
+    if (b->tensor.rows != k) {
+        fprintf(stderr, "runtime error: matmul: incompatible dimensions\n"); exit(1);
+    }
+    CodaVal *out = coda_mk_tensor(m, n);
+    for (int64_t i = 0; i < m; i++) {
+        for (int64_t kk = 0; kk < k; kk++) {
+            for (int64_t j = 0; j < n; j++) {
+                out->tensor.data[i * n + j] += a->tensor.data[i * k + kk] * b->tensor.data[kk * n + j];
+            }
+        }
+    }
+    return out;
+}
+
+CodaVal* coda_tensor_add(CodaVal *a, CodaVal *b) {
+    if (!a || a->kind != CODA_TENSOR || !b || b->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: tensor_add: not a tensor\n"); exit(1);
+    }
+    if (a->tensor.rows != b->tensor.rows || a->tensor.cols != b->tensor.cols) {
+        fprintf(stderr, "runtime error: tensor_add: shape mismatch\n"); exit(1);
+    }
+    int64_t size = a->tensor.rows * a->tensor.cols;
+    CodaVal *out = coda_mk_tensor(a->tensor.rows, a->tensor.cols);
+    for (int64_t i = 0; i < size; i++) out->tensor.data[i] = a->tensor.data[i] + b->tensor.data[i];
+    return out;
+}
+
+CodaVal* coda_tensor_scale(CodaVal *t, double scalar) {
+    if (!t || t->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: tensor_scale: not a tensor\n"); exit(1);
+    }
+    int64_t size = t->tensor.rows * t->tensor.cols;
+    CodaVal *out = coda_mk_tensor(t->tensor.rows, t->tensor.cols);
+    for (int64_t i = 0; i < size; i++) out->tensor.data[i] = scalar * t->tensor.data[i];
+    return out;
+}
+
+CodaVal* coda_tensor_reshape(int64_t rows, int64_t cols, CodaVal *t) {
+    if (!t || t->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: tensor_reshape: not a tensor\n"); exit(1);
+    }
+    int64_t old_size = t->tensor.rows * t->tensor.cols;
+    int64_t new_size = rows * cols;
+    if (old_size != new_size) {
+        fprintf(stderr, "runtime error: tensor_reshape: size mismatch\n"); exit(1);
+    }
+    CodaVal *out = coda_mk_tensor(rows, cols);
+    memcpy(out->tensor.data, t->tensor.data, old_size * sizeof(double));
+    return out;
+}
+
+int64_t coda_tensor_rows(CodaVal *t) {
+    if (!t || t->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: tensor_rows: not a tensor\n"); exit(1);
+    }
+    return t->tensor.rows;
+}
+
+int64_t coda_tensor_cols(CodaVal *t) {
+    if (!t || t->kind != CODA_TENSOR) {
+        fprintf(stderr, "runtime error: tensor_cols: not a tensor\n"); exit(1);
+    }
+    return t->tensor.cols;
 }
 
 CodaVal* coda_mk_str(const char *s) {
@@ -209,6 +340,7 @@ static int val_eq(CodaVal *a, CodaVal *b) {
     if (a->kind != b->kind) return 0;
     switch (a->kind) {
         case CODA_INT: return a->int_val == b->int_val;
+        case CODA_FLOAT: return a->float_val == b->float_val;
         case CODA_STR: return strcmp(a->str_val, b->str_val) == 0;
         case CODA_TAG:
             return strcmp(a->tag.name, b->tag.name) == 0 && val_eq(a->tag.payload, b->tag.payload);
@@ -405,8 +537,19 @@ CodaVal* coda_list_init(CodaVal *n_val, CodaVal *f) {
 static void print_inner(CodaVal *v) {
     switch (v->kind) {
         case CODA_INT: printf("%ld", (long)v->int_val); break;
+        case CODA_FLOAT: printf("%g", v->float_val); break;
         case CODA_STR: printf("%s", v->str_val); break;
         case CODA_CLOSURE: printf("<fn>"); break;
+        case CODA_TENSOR: {
+            printf("Tensor(%ldx%ld, [", (long)v->tensor.rows, (long)v->tensor.cols);
+            int64_t size = v->tensor.rows * v->tensor.cols;
+            for (int64_t i = 0; i < size; i++) {
+                if (i > 0) printf(", ");
+                printf("%g", v->tensor.data[i]);
+            }
+            printf("])");
+            break;
+        }
         case CODA_TAG:
             if (v->tag.payload->kind == CODA_RECORD && v->tag.payload->record.nfields == 0) {
                 printf("%s", v->tag.name);

@@ -3,11 +3,13 @@ use lang::ast::*;
 use lang::parser::{expr_parser, file_parser};
 
 fn d() -> Span { 0..0 }
+fn n() -> Spanned<Expr> { Node::new(NodeId(0), d(), Expr::Var(String::new())) }
+fn mk(inner: Expr) -> Spanned<Expr> { Node::new(NodeId(0), d(), inner) }
 
 /// Strip spans from a `Spanned<Expr>` recursively so tests can compare structure only.
-/// All spans are replaced with `0..0` (dummy) so comparisons are span-agnostic.
+/// All spans are replaced with `0..0` (dummy) and NodeId(0) so comparisons are span-agnostic.
 fn strip(se: Spanned<Expr>) -> Spanned<Expr> {
-    let e = match se.0 {
+    let e = match se.inner {
         Expr::Var(n) => Expr::Var(n),
         Expr::Lit(l) => Expr::Lit(l),
         Expr::Import(p) => Expr::Import(p),
@@ -31,8 +33,16 @@ fn strip(se: Spanned<Expr>) -> Spanned<Expr> {
             otherwise.map(|o| Box::new(strip(*o))),
         ),
         Expr::List(elems) => Expr::List(elems.into_iter().map(strip).collect()),
+        Expr::Index(arr, indices) => Expr::Index(
+            Box::new(strip(*arr)),
+            indices.into_iter().map(|idx| match idx {
+                IndexArg::Scalar(e) => IndexArg::Scalar(strip(e)),
+                IndexArg::Fancy(e) => IndexArg::Fancy(strip(e)),
+                IndexArg::Slice(a, b) => IndexArg::Slice(a.map(strip), b.map(strip)),
+            }).collect(),
+        ),
     };
-    (e, d())
+    mk(e)
 }
 
 fn strip_item(item: BlockItem) -> BlockItem {
@@ -49,14 +59,14 @@ fn parse_expr(src: &str) -> Expr {
         .then_ignore(chumsky::primitive::end())
         .parse(src)
         .unwrap_or_else(|errs| panic!("parse failed for {:?}: {:?}", src, errs));
-    strip(spanned).0
+    strip(spanned).inner
 }
 
 fn parse_file(src: &str) -> Expr {
     let spanned = file_parser()
         .parse(src)
         .unwrap_or_else(|errs| panic!("parse failed for {:?}: {:?}", src, errs));
-    strip(spanned).0
+    strip(spanned).inner
 }
 
 // Helper constructors producing span-free Expr values for comparison.
@@ -67,18 +77,18 @@ fn int(n: i64) -> Expr { Expr::Lit(Lit::Int(n)) }
 fn str_(s: &str) -> Expr { Expr::Lit(Lit::Str(s.into())) }
 fn app(f: Expr, args: Vec<Expr>) -> Expr {
     Expr::App(
-        Box::new((f, d())),
-        args.into_iter().map(|a| (a, d())).collect(),
+        Box::new(mk(f)),
+        args.into_iter().map(mk).collect(),
     )
 }
 fn lam(params: Vec<&str>, body: Expr) -> Expr {
-    Expr::Lam(params.iter().map(|s| s.to_string()).collect(), Box::new((body, d())))
+    Expr::Lam(params.iter().map(|s| s.to_string()).collect(), Box::new(mk(body)))
 }
 fn block(bindings: Vec<(&str, Expr)>, body: Expr) -> Expr {
     use lang::ast::BlockItem;
     Expr::Block(
-        bindings.into_iter().map(|(k, v)| BlockItem::Bind(k.into(), (v, d()))).collect(),
-        Box::new((body, d())),
+        bindings.into_iter().map(|(k, v)| BlockItem::Bind(k.into(), mk(v))).collect(),
+        Box::new(mk(body)),
     )
 }
 

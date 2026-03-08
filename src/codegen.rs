@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chumsky::Parser as _;
-use crate::ast::{BlockItem, Expr, Lit, Spanned};
+use crate::ast::{BlockItem, Expr, Lit, Node, Spanned};
 use crate::parser::file_parser;
 
 // ── Compiler state ────────────────────────────────────────────────────────────
@@ -150,7 +150,7 @@ impl FnBuilder {
 // ── Free variable analysis ────────────────────────────────────────────────────
 
 fn free_vars(expr: &Spanned<Expr>, bound: &HashSet<String>) -> HashSet<String> {
-    let (expr, _) = expr;
+    let Node { inner: expr, .. } = expr;
     match expr {
         Expr::Var(n) => {
             if bound.contains(n) { HashSet::new() } else { [n.clone()].into_iter().collect() }
@@ -199,6 +199,20 @@ fn free_vars(expr: &Spanned<Expr>, bound: &HashSet<String>) -> HashSet<String> {
         Expr::List(elems) => elems.iter().flat_map(|e| free_vars(e, bound)).collect(),
         Expr::Import(_) => HashSet::new(),
         Expr::Lit(_) => HashSet::new(),
+        Expr::Index(arr, indices) => {
+            let mut fvs = free_vars(arr, bound);
+            for idx in indices {
+                use crate::ast::IndexArg;
+                match idx {
+                    IndexArg::Scalar(e) | IndexArg::Fancy(e) => fvs.extend(free_vars(e, bound)),
+                    IndexArg::Slice(a, b) => {
+                        if let Some(e) = a { fvs.extend(free_vars(e, bound)); }
+                        if let Some(e) = b { fvs.extend(free_vars(e, bound)); }
+                    }
+                }
+            }
+            fvs
+        }
     }
 }
 
@@ -212,6 +226,9 @@ fn setup_std_env(c: &mut Compiler, fb: &mut FnBuilder) -> Env {
         "head", "tail", "len", "map", "fold",
         "list_of", "list_init",
         "then", ">>=", "ok", "fail", "catch", "print",
+        "zeros", "ones", "tensor_get", "tensor_set", "matmul",
+        "add_tensor", "scale_tensor", "reshape", "tensor_rows", "tensor_cols",
+        "+.", "-.", "*.", "/.",
     ];
     for name in &builtins {
         if let Some(fn_name) = builtin_fn(name) {
@@ -239,11 +256,18 @@ fn compile_expr(
     expr: &Spanned<Expr>,
     tail: bool,
 ) -> Result<String, String> {
-    let (expr, _) = expr;
+    let Node { inner: expr, .. } = expr;
     match expr {
         Expr::Lit(Lit::Int(n)) => {
             let r = c.ssa("int");
             fb.emit(format!("{} = call ptr @coda_mk_int(i64 {})", r, n));
+            fb.own(&r);
+            Ok(r)
+        }
+
+        Expr::Lit(Lit::Float(f)) => {
+            let r = c.ssa("float");
+            fb.emit(format!("{} = call ptr @coda_mk_float(double {})", r, f));
             fb.own(&r);
             Ok(r)
         }
@@ -328,6 +352,12 @@ fn compile_expr(
             let ssas: Vec<String> =
                 elems.iter().map(|e| compile_expr(c, fb, env, e, false)).collect::<Result<_, _>>()?;
             emit_list(c, fb, &ssas)
+        }
+
+        Expr::Index(arr_expr, _indices) => {
+            // Stub: compile the array expression but indexing not yet implemented in codegen.
+            // The type checker handles this; for now just return the array value.
+            compile_expr(c, fb, env, arr_expr, tail)
         }
 
         Expr::Import(path) => {
@@ -742,6 +772,7 @@ declare ptr @coda_map(ptr, ptr)
 declare ptr @coda_fold(ptr, ptr, ptr)
 declare ptr @coda_list_of(ptr, ptr)
 declare ptr @coda_list_init(ptr, ptr)
+declare i64 @coda_unbox_int(ptr)
 declare void @coda_retain(ptr)
 declare void @coda_release(ptr)
 declare ptr @coda_fix_tail_call(ptr, ptr, i32)
@@ -752,6 +783,18 @@ declare ptr @coda_task_catch(ptr, ptr)
 declare ptr @coda_task_print(ptr)
 declare ptr @coda_task_read_line()
 declare ptr @coda_run_task(ptr)
+declare ptr @coda_mk_float(double)
+declare double @coda_unbox_float(ptr)
+declare ptr @coda_mk_tensor(i64, i64)
+declare ptr @coda_mk_tensor_ones(i64, i64)
+declare ptr @coda_tensor_matmul(ptr, ptr)
+declare ptr @coda_tensor_add(ptr, ptr)
+declare ptr @coda_tensor_scale(ptr, double)
+declare ptr @coda_tensor_reshape(i64, i64, ptr)
+declare ptr @coda_tensor_get(ptr, i64, i64)
+declare ptr @coda_tensor_set(ptr, i64, i64, ptr)
+declare i64 @coda_tensor_rows(ptr)
+declare i64 @coda_tensor_cols(ptr)
 "#;
 
 const BUILTIN_WRAPPERS: &str = r#"; Builtin wrapper functions (closure-callable wrappers around C runtime fns)
@@ -943,6 +986,175 @@ entry:
   %r = call ptr @coda_task_print(ptr %s)
   ret ptr %r
 }
+
+define ptr @builtin_zeros(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %rows_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %cols_box = load ptr, ptr %p1
+  %rows = call i64 @coda_unbox_int(ptr %rows_box)
+  %cols = call i64 @coda_unbox_int(ptr %cols_box)
+  %r = call ptr @coda_mk_tensor(i64 %rows, i64 %cols)
+  ret ptr %r
+}
+
+define ptr @builtin_ones(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %rows_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %cols_box = load ptr, ptr %p1
+  %rows = call i64 @coda_unbox_int(ptr %rows_box)
+  %cols = call i64 @coda_unbox_int(ptr %cols_box)
+  %r = call ptr @coda_mk_tensor_ones(i64 %rows, i64 %cols)
+  ret ptr %r
+}
+
+define ptr @builtin_tensor_get(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %t = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %i_box = load ptr, ptr %p1
+  %p2 = getelementptr ptr, ptr %args, i32 2
+  %j_box = load ptr, ptr %p2
+  %i = call i64 @coda_unbox_int(ptr %i_box)
+  %j = call i64 @coda_unbox_int(ptr %j_box)
+  %r = call ptr @coda_tensor_get(ptr %t, i64 %i, i64 %j)
+  ret ptr %r
+}
+
+define ptr @builtin_tensor_set(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %t = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %i_box = load ptr, ptr %p1
+  %p2 = getelementptr ptr, ptr %args, i32 2
+  %j_box = load ptr, ptr %p2
+  %p3 = getelementptr ptr, ptr %args, i32 3
+  %v = load ptr, ptr %p3
+  %i = call i64 @coda_unbox_int(ptr %i_box)
+  %j = call i64 @coda_unbox_int(ptr %j_box)
+  %r = call ptr @coda_tensor_set(ptr %t, i64 %i, i64 %j, ptr %v)
+  ret ptr %r
+}
+
+define ptr @builtin_matmul(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %a = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %b = load ptr, ptr %p1
+  %r = call ptr @coda_tensor_matmul(ptr %a, ptr %b)
+  ret ptr %r
+}
+
+define ptr @builtin_add_tensor(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %a = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %b = load ptr, ptr %p1
+  %r = call ptr @coda_tensor_add(ptr %a, ptr %b)
+  ret ptr %r
+}
+
+define ptr @builtin_scale_tensor(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %s_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %t = load ptr, ptr %p1
+  %s = call double @coda_unbox_float(ptr %s_box)
+  %r = call ptr @coda_tensor_scale(ptr %t, double %s)
+  ret ptr %r
+}
+
+define ptr @builtin_reshape(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %rows_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %cols_box = load ptr, ptr %p1
+  %p2 = getelementptr ptr, ptr %args, i32 2
+  %t = load ptr, ptr %p2
+  %rows = call i64 @coda_unbox_int(ptr %rows_box)
+  %cols = call i64 @coda_unbox_int(ptr %cols_box)
+  %r = call ptr @coda_tensor_reshape(i64 %rows, i64 %cols, ptr %t)
+  ret ptr %r
+}
+
+define ptr @builtin_tensor_rows(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %t = load ptr, ptr %p0
+  %n = call i64 @coda_tensor_rows(ptr %t)
+  %r = call ptr @coda_mk_int(i64 %n)
+  ret ptr %r
+}
+
+define ptr @builtin_tensor_cols(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %t = load ptr, ptr %p0
+  %n = call i64 @coda_tensor_cols(ptr %t)
+  %r = call ptr @coda_mk_int(i64 %n)
+  ret ptr %r
+}
+
+define ptr @builtin_float_add(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %a_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %b_box = load ptr, ptr %p1
+  %a = call double @coda_unbox_float(ptr %a_box)
+  %b = call double @coda_unbox_float(ptr %b_box)
+  %res = fadd double %a, %b
+  %r = call ptr @coda_mk_float(double %res)
+  ret ptr %r
+}
+
+define ptr @builtin_float_sub(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %a_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %b_box = load ptr, ptr %p1
+  %a = call double @coda_unbox_float(ptr %a_box)
+  %b = call double @coda_unbox_float(ptr %b_box)
+  %res = fsub double %a, %b
+  %r = call ptr @coda_mk_float(double %res)
+  ret ptr %r
+}
+
+define ptr @builtin_float_mul(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %a_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %b_box = load ptr, ptr %p1
+  %a = call double @coda_unbox_float(ptr %a_box)
+  %b = call double @coda_unbox_float(ptr %b_box)
+  %res = fmul double %a, %b
+  %r = call ptr @coda_mk_float(double %res)
+  ret ptr %r
+}
+
+define ptr @builtin_float_div(ptr %caps, ptr %args, i32 %nargs) {
+entry:
+  %p0 = getelementptr ptr, ptr %args, i32 0
+  %a_box = load ptr, ptr %p0
+  %p1 = getelementptr ptr, ptr %args, i32 1
+  %b_box = load ptr, ptr %p1
+  %a = call double @coda_unbox_float(ptr %a_box)
+  %b = call double @coda_unbox_float(ptr %b_box)
+  %res = fdiv double %a, %b
+  %r = call ptr @coda_mk_float(double %res)
+  ret ptr %r
+}
 "#;
 
 // ── String constant emission ──────────────────────────────────────────────────
@@ -991,6 +1203,20 @@ fn builtin_fn(name: &str) -> Option<&'static str> {
         "then"  => Some("builtin_task_bind"),
         "catch" => Some("builtin_catch"),
         "print" => Some("builtin_print"),
+        "zeros"        => Some("builtin_zeros"),
+        "ones"         => Some("builtin_ones"),
+        "tensor_get"   => Some("builtin_tensor_get"),
+        "tensor_set"   => Some("builtin_tensor_set"),
+        "matmul"       => Some("builtin_matmul"),
+        "add_tensor"   => Some("builtin_add_tensor"),
+        "scale_tensor" => Some("builtin_scale_tensor"),
+        "reshape"      => Some("builtin_reshape"),
+        "tensor_rows"  => Some("builtin_tensor_rows"),
+        "tensor_cols"  => Some("builtin_tensor_cols"),
+        "+."  => Some("builtin_float_add"),
+        "-."  => Some("builtin_float_sub"),
+        "*."  => Some("builtin_float_mul"),
+        "/."  => Some("builtin_float_div"),
         _ => None,
     }
 }

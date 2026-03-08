@@ -1,0 +1,9 @@
+-- Tensor demo: create a 2x3 all-ones matrix and matmul with a 3x2 ones matrix.
+-- Each entry of the 2x2 result is 3 (sum of 3 ones).
+
+a = ones(2, 3)
+b = ones(3, 2)
+c = matmul(a, b)
+-- c : F64[2, 2], all entries = 3.0
+-- No direct assertion on tensor display; just check it type-checks and runs.
+c

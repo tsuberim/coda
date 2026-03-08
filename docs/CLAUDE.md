@@ -44,9 +44,10 @@ Symbolic names are sequences of `!@$%^&*-+=|<>?/~.:`:
 
 ```
 42        -- integer
+3.14      -- float
 `hello`   -- string (backtick-quoted)
-[1, 2, 3] -- list (homogeneous, any element type)
-[]        -- empty list
+[1, 2, 3] -- array (homogeneous, rank-1 Int[3])
+[]        -- empty array (Int[0])
 ```
 
 ### Template strings
@@ -131,10 +132,47 @@ when shape is
 
 Tags with no payload carry an implicit unit payload. Unions are row-polymorphic: a value of type `[Some Int | *]` is accepted wherever `[Some Int, None | *]` is expected.
 
-### Lists
+### Arrays and shaped types
+
+Arrays are rank-polymorphic. The type `Int[3]` means a 1-D array of 3 integers; `F64[3, 4]` is a 3×4 matrix of floats. The shape is always statically known.
 
 ```
-xs = [1, 2, 3]
+xs = [1, 2, 3]          -- Int[3]
+ys = [4, 5, 6]
+xs + ys                 -- Int[3]  (element-wise, same shape)
+xs + 1                  -- Int[3]  (scalar broadcast)
+
+xs[0]                   -- Int    (index reduces rank)
+xs[1:3]                 -- Int[2] (slice: literal bounds)
+```
+
+Type annotations use `T[d1, d2, ...]` syntax:
+
+```
+v : Int[3]
+v = [1, 2, 3]
+
+mat : F64[3, 4]
+```
+
+Dim variables (lowercase) are generalized:
+
+```
+\x -> x + x   -- Int[n] -> Int[n]  (for any n)
+```
+
+Scalar functions are automatically **lifted** to arrays:
+
+```
+f : Int -> F64
+f([1, 2, 3])    -- F64[3]
+```
+
+Broadcasting follows prefix rules: shapes must be equal, or one must be a suffix-prefix of the other; otherwise a `BroadcastFail` type error is raised.
+
+List operations still work on rank-1 arrays:
+
+```
 len(xs)                       -- 3
 0 :: xs                       -- [0, 1, 2, 3]
 map(\x -> x + x, xs)         -- [2, 4, 6]
@@ -149,8 +187,6 @@ when head(xs) is
 
 `::` is also available as `cons`; `<>` as `append`.
 
-All elements must have the same type (inferred). The type is `List(a)`.
-
 ### Type annotations
 
 Optional; enforced when present.
@@ -160,9 +196,11 @@ Optional; enforced when present.
 f : Int -> Int
 f = \x -> x + 1
 
--- parameterized types use Con(arg, ...) syntax
-xs : List(Int)
+-- shaped types
+xs : Int[3]
 xs = [1, 2, 3]
+
+mat : F64[3, 4]
 
 -- in-block
 (n : Int; n = 5; n + 1)
@@ -189,6 +227,8 @@ math.double(21)
 ## Type system
 
 - Hindley-Milner with let-polymorphism
+- Rank-polymorphic shaped types: `Int[n]`, `F64[m, n]`, scalar = `Int` (zero dims)
+- Automatic lifting of scalar functions to shaped types; broadcasting for multi-arg ops
 - Row-polymorphic records: `{field: T | r}`
 - Row-polymorphic unions: `[Tag T | r]`
 - Open union construction: `Some 5 : [Some Int | *]`
@@ -255,9 +295,9 @@ The handler receives the error value and returns a new Task. The result error ty
 | Name     | Type                                    | Description              |
 |----------|-----------------------------------------|--------------------------|
 | `++`     | `Str Str -> Str`                        | String concatenation     |
-| `+`      | `Int Int -> Int`                        | Integer addition         |
-| `-`      | `Int Int -> Int`                        | Integer subtraction      |
-| `*`      | `Int Int -> Int`                        | Integer multiplication   |
+| `+`      | `Int Int -> Int`                        | Integer addition (lifted to arrays) |
+| `-`      | `Int Int -> Int`                        | Integer subtraction (lifted) |
+| `*`      | `Int Int -> Int`                        | Integer multiplication (lifted) |
 | `==`     | `a -> a -> [False \| True]`             | Structural equality      |
 | `fix`    | `(a -> a) -> a`                         | Fixed-point (recursion)  |
 | `::` / `cons`   | `a -> List(a) -> List(a)`        | Prepend element          |
@@ -266,9 +306,12 @@ The handler receives the error value and returns a new Task. The result error ty
 | `len`    | `List(a) -> Int`                        | Length                   |
 | `map`    | `(a -> b) -> List(a) -> List(b)`        | Transform elements       |
 | `fold`   | `(b -> a -> b) -> b -> List(a) -> b`    | Left fold                |
-| `<>` / `append` | `List(a) -> List(a) -> List(a)`     | Concatenate two lists    |
-| `list_of`   | `Int -> a -> List(a)`                   | N copies of a value      |
-| `list_init` | `Int -> (Int -> a) -> List(a)`          | N items via index fn     |
+| `<>` / `append` | `List(a) -> List(a) -> List(a)` | Concatenate two lists    |
+| `list_of`   | `Int -> a -> List(a)`                | N copies of a value      |
+| `list_init` | `Int -> (Int -> a) -> List(a)`       | N items via index fn     |
+| `ones`   | `Int Int -> F64[m, n]`                  | m×n matrix of 1.0        |
+| `zeros`  | `Int Int -> F64[m, n]`                  | m×n matrix of 0.0        |
+| `matmul` | `F64[m, k] F64[k, n] -> F64[m, n]`     | Matrix multiplication    |
 
 ## Implementation docs
 
