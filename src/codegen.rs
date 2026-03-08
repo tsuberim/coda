@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use chumsky::Parser as _;
 use crate::ast::{BlockItem, Expr, Lit};
+use crate::parser::file_parser;
 
 // ── Compiler state ────────────────────────────────────────────────────────────
 
@@ -8,11 +10,19 @@ struct Compiler {
     counter: usize,
     string_consts: Vec<(String, String)>, // (global_name, content)
     top_fns: Vec<String>,
+    module_cache: HashMap<String, String>, // canonical path -> fn_name
+    module_in_progress: HashSet<String>,   // cycle detection
 }
 
 impl Compiler {
     fn new() -> Self {
-        Compiler { counter: 0, string_consts: Vec::new(), top_fns: Vec::new() }
+        Compiler {
+            counter: 0,
+            string_consts: Vec::new(),
+            top_fns: Vec::new(),
+            module_cache: HashMap::new(),
+            module_in_progress: HashSet::new(),
+        }
     }
 
     fn next(&mut self) -> usize {
@@ -191,6 +201,32 @@ fn free_vars(expr: &Expr, bound: &HashSet<String>) -> HashSet<String> {
     }
 }
 
+// ── Standard env setup ────────────────────────────────────────────────────────
+
+fn setup_std_env(c: &mut Compiler, fb: &mut FnBuilder) -> Env {
+    let mut env: Env = HashMap::new();
+    let builtins = [
+        "++", "+", "-", "*", "==", "fix",
+        "::", "cons", "<>", "append",
+        "head", "tail", "len", "map", "fold",
+        "list_of", "list_init",
+        "then", ">>=", "ok", "fail", "catch", "print",
+    ];
+    for name in &builtins {
+        if let Some(fn_name) = builtin_fn(name) {
+            let ssa = c.ssa("b");
+            fb.emit(format!("{} = call ptr @coda_mk_closure(ptr @{}, ptr null, i32 0)", ssa, fn_name));
+            fb.own(&ssa);
+            env.insert(name.to_string(), ssa);
+        }
+    }
+    let rl = c.ssa("b");
+    fb.emit(format!("{} = call ptr @coda_task_read_line()", rl));
+    fb.own(&rl);
+    env.insert("read_line".to_string(), rl);
+    env
+}
+
 // ── Expression compiler ───────────────────────────────────────────────────────
 
 type Env = HashMap<String, String>; // source name -> SSA name
@@ -292,7 +328,59 @@ fn compile_expr(
             emit_list(c, fb, &ssas)
         }
 
-        Expr::Import(_) => Err("imports not supported in compiled mode".into()),
+        Expr::Import(path) => {
+            let canonical = std::fs::canonicalize(path)
+                .map_err(|e| format!("import `{}`: {}", path, e))?
+                .to_string_lossy()
+                .into_owned();
+
+            // Cycle detection
+            if c.module_in_progress.contains(&canonical) {
+                return Err(format!("circular import: {}", path));
+            }
+
+            // Return cached result if already compiled
+            if let Some(fn_name) = c.module_cache.get(&canonical).cloned() {
+                let r = c.ssa("mod");
+                fb.emit(format!("{} = call ptr @{}()", r, fn_name));
+                fb.own(&r);
+                return Ok(r);
+            }
+
+            // Parse the imported file
+            let src = std::fs::read_to_string(&canonical)
+                .map_err(|e| format!("import `{}`: {}", path, e))?;
+            let ast = file_parser()
+                .parse(src.as_str())
+                .map_err(|e| format!("import `{}`: parse error: {:?}", path, e))?;
+
+            // Reserve a function name and mark in-progress
+            let fn_name = format!("coda_module_{}", c.next());
+            c.module_in_progress.insert(canonical.clone());
+
+            // Compile the module body into its own FnBuilder
+            let mut mod_fb = FnBuilder::new();
+            let mod_env = setup_std_env(c, &mut mod_fb);
+            let result = compile_expr(c, &mut mod_fb, &mod_env, &ast, false)?;
+            mod_fb.prepare_export(&result);
+            mod_fb.emit_ret(&result);
+
+            let body_ir = mod_fb.to_ir();
+            c.top_fns.push(format!(
+                "define ptr @{}() {{\n{}}}",
+                fn_name, body_ir
+            ));
+
+            // Mark as done
+            c.module_in_progress.remove(&canonical);
+            c.module_cache.insert(canonical, fn_name.clone());
+
+            // Call the module function at the current call site
+            let r = c.ssa("mod");
+            fb.emit(format!("{} = call ptr @{}()", r, fn_name));
+            fb.own(&r);
+            Ok(r)
+        }
     }
 }
 
@@ -912,34 +1000,8 @@ fn builtin_fn(name: &str) -> Option<&'static str> {
 pub fn compile(expr: &Expr, is_task: bool) -> Result<String, String> {
     let mut c = Compiler::new();
     let mut fb = FnBuilder::new();
-    let mut env: Env = HashMap::new();
 
-    // Set up standard env: create closure wrappers for all builtins.
-    let builtins = [
-        "++", "+", "-", "*", "==", "fix",
-        "::", "cons", "<>", "append",
-        "head", "tail", "len", "map", "fold",
-        "list_of", "list_init",
-        "then", // alias for >>=
-        ">>=", "ok", "fail", "catch", "print",
-    ];
-    for name in &builtins {
-        if let Some(fn_name) = builtin_fn(name) {
-            let ssa = c.ssa("b");
-            fb.emit(format!(
-                "{} = call ptr @coda_mk_closure(ptr @{}, ptr null, i32 0)",
-                ssa, fn_name
-            ));
-            fb.own(&ssa);
-            env.insert(name.to_string(), ssa);
-        }
-    }
-
-    // read_line is a task value, not a function wrapper
-    let rl = c.ssa("b");
-    fb.emit(format!("{} = call ptr @coda_task_read_line()", rl));
-    fb.own(&rl);
-    env.insert("read_line".to_string(), rl);
+    let env = setup_std_env(&mut c, &mut fb);
 
     // Compile the program body.
     let result = compile_expr(&mut c, &mut fb, &env, expr, false)?;

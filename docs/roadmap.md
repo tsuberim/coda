@@ -14,13 +14,9 @@ Roughly in order. Each item builds on the previous.
 
 `Task ok err` represented as a zero-arg closure returning `[Ok val | Err e]`. `ok`, `>>=`, `fail`, `catch`, `print`, `read_line` wired as compiled builtins. `coda_run_task` called from `coda_main` when the top-level type is `Task`.
 
-## 4. Compiled imports / modules
+## ✓ 4. Compiled imports / modules
 
-`import \`path\`` needs to work in compiled mode. Options:
-- **Whole-program**: resolve all imports at compile time, inline everything into one `.ll` file. Simple, no linking complexity.
-- **Separate compilation**: compile each module to an object file, link. Requires a stable ABI for `CodaVal*` across modules (already have it).
-
-Start with whole-program.
+Whole-program: each `import \`path\`` is compiled into a `@coda_module_N()` function inlined into the same `.ll` file. Deduplication via a path cache in `Compiler`; cycle detection via an in-progress set. Paths resolved with `canonicalize` (relative to CWD), matching interpreter behaviour.
 
 ## 5. Integer comparison and division
 

@@ -107,6 +107,7 @@ fn run_compiled_impl(path: &str, track_allocs: bool) {
 #[test] fn compiled_list_init()    { run_compiled("corpus/list_init.coda"); }
 #[test] fn compiled_list_of()      { run_compiled("corpus/list_of.coda"); }
 #[test] fn compiled_tco()          { run_compiled("corpus/tco.coda"); }
+#[test] fn compiled_modules()      { run_compiled("corpus/modules.coda"); }
 
 // Stress / benchmark corpus
 #[test] fn compiled_bench_fib()      { run_compiled("corpus/bench_fib.coda"); }
@@ -136,6 +137,7 @@ fn run_compiled_impl(path: &str, track_allocs: bool) {
 #[test] fn leak_list_init()    { check_leaks("corpus/list_init.coda"); }
 #[test] fn leak_list_of()      { check_leaks("corpus/list_of.coda"); }
 #[test] fn leak_tco()          { check_leaks("corpus/tco.coda"); }
+#[test] fn leak_modules()      { check_leaks("corpus/modules.coda"); }
 #[test] fn leak_bench_fib()      { check_leaks("corpus/bench_fib.coda"); }
 #[test] fn leak_bench_triangle() { check_leaks("corpus/bench_triangle.coda"); }
 #[test] fn leak_bench_list_sum() { check_leaks("corpus/bench_list_sum.coda"); }
